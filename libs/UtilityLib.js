@@ -121,7 +121,6 @@ function onlyAdmin(){
 
 // Add admin
 function addAdmin(userId){
-  onlyAdmin()
 
   userId = parseInt(userId)
   if (!userId){
