@@ -1,7 +1,0 @@
-{
-  "bb_sync_version": "1.0",
-  "name": "UtilityLib",
-  "description": "A multi-function BB Utility Library: ping, iteration stats, admin system",
-  "version": "1.0.0",
-  "git_remote": "https://github.com/abhijeetpatil2122/BB-Utility-Lib.git"
-}
