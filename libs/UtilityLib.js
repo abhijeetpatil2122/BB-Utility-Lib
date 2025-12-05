@@ -1,79 +1,67 @@
 /*
- * Utility Library — FINAL v3
+ * Utility Library — v4 (Stable Production)
  * Features:
- *    ping()
- *    iteration(mode)  ← 3-mode: formatted, inspect, pick values
- *    setupOwner()
- *    onlyAdmin()
- *    addAdmin()
- *    removeAdmin()
- *    showAdminList()
-*/
+ *   ping()
+ *   iteration(mode)   // formatted, inspect, pick-mode
+ *   setupOwner()
+ *   onlyAdmin()
+ *   addAdmin()
+ *   removeAdmin()
+ *   showAdminList()
+ */
 
 let LIB = "UtilityLib_";
 
 const OWNER_KEY  = LIB + "owner";
 const ADMINS_KEY = LIB + "admins";
 
+/* Basic sender */
 function send(to, text) {
   Api.sendMessage({ chat_id: to, text: text, parse_mode: "HTML" });
 }
 
-/* ============================
-       INTERNAL HELPERS
-============================ */
-function getOwner() {
-  return Bot.getProperty(OWNER_KEY);
-}
+/* Helpers */
+function getOwner() { return Bot.getProperty(OWNER_KEY); }
+function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
+function setAdmins(list) { Bot.setProperty(ADMINS_KEY, list, "json"); }
+function isNumeric(v) { return /^\d+$/.test(String(v)); }
 
-function getAdmins() {
-  return Bot.getProperty(ADMINS_KEY) || [];
-}
-
-function setAdmins(list) {
-  Bot.setProperty(ADMINS_KEY, list, "json");
-}
-
-/* ============================
-       OWNER SETUP
-============================ */
+/* ------------------------------
+   OWNER SETUP (run once)
+-------------------------------- */
 function setupOwner() {
   let owner = getOwner();
 
   if (owner) {
-    send(
-      user.telegramid,
-      "ℹ️ <b>Owner already set:</b>\n<code>" + owner + "</code>"
-    );
+    send(user.telegramid, "ℹ️ <b>Owner already set:</b> <code>" + owner + "</code>");
     return true;
   }
 
   Bot.setProperty(OWNER_KEY, user.telegramid, "integer");
   Bot.setProperty(ADMINS_KEY, [user.telegramid], "json");
 
-  send(
-    user.telegramid,
-    "🎉 <b>Owner Setup Complete!</b>\n" +
-    "You are now the <b>Owner</b> and first <b>Admin</b>."
+  send(user.telegramid,
+    "🎉 <b>Owner Setup Complete!</b>\nYou are now the <b>Owner</b> & first <b>Admin</b>."
   );
 
   return true;
 }
 
-/* ============================
-        ADMIN CHECK
-============================ */
+/* ------------------------------
+   ADMIN CHECK
+-------------------------------- */
 function onlyAdmin() {
   let owner = getOwner();
+
   if (!owner) {
-    send(
-      user.telegramid,
-      "⚠️ <b>Admin System Not Set Up!</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
+    send(user.telegramid,
+      "⚠️ <b>Admin System Not Set!</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
     );
     return false;
   }
 
   let admins = getAdmins();
+
   if (!admins.includes(user.telegramid)) {
     send(user.telegramid, "❌ <b>You are not an admin.</b>");
     return false;
@@ -82,47 +70,47 @@ function onlyAdmin() {
   return true;
 }
 
-/* ============================
-        ADD ADMIN
-============================ */
+/* ------------------------------
+   ADD ADMIN
+-------------------------------- */
 function addAdmin(id) {
   if (!onlyAdmin()) return false;
 
-  id = parseInt(id);
-
-  if (!id) {
-    send(user.telegramid, "⚠️ <b>Invalid Telegram ID</b>");
+  if (!isNumeric(id)) {
+    send(user.telegramid, "⚠️ <b>Telegram ID must be numeric.</b>");
     return false;
   }
+
+  id = Number(id);
 
   let admins = getAdmins();
 
   if (admins.includes(id)) {
-    send(user.telegramid, "⚠️ <b>User is already an admin.</b>");
+    send(user.telegramid, "⚠️ <b>User is already admin.</b>");
     return false;
   }
 
   admins.push(id);
   setAdmins(admins);
 
-  send(user.telegramid, `✅ <b>Admin Added</b>\nUser: <code>${id}</code>`);
-  send(id, "🎉 <b>You have been promoted to Admin!</b>");
+  send(user.telegramid, `✅ <b>Admin Added:</b> <code>${id}</code>`);
+  send(id, "🎉 <b>You are now an Admin!</b>");
 
   return true;
 }
 
-/* ============================
-        REMOVE ADMIN
-============================ */
+/* ------------------------------
+   REMOVE ADMIN
+-------------------------------- */
 function removeAdmin(id) {
   if (!onlyAdmin()) return false;
 
-  id = parseInt(id);
-
-  if (!id) {
-    send(user.telegramid, "⚠️ <b>Invalid Telegram ID</b>");
+  if (!isNumeric(id)) {
+    send(user.telegramid, "⚠️ <b>Telegram ID must be numeric.</b>");
     return false;
   }
+
+  id = Number(id);
 
   let owner = getOwner();
   if (id === owner) {
@@ -131,6 +119,7 @@ function removeAdmin(id) {
   }
 
   let admins = getAdmins();
+
   if (!admins.includes(id)) {
     send(user.telegramid, "⚠️ <b>User is not an admin.</b>");
     return false;
@@ -139,32 +128,27 @@ function removeAdmin(id) {
   admins = admins.filter(a => a !== id);
   setAdmins(admins);
 
-  send(user.telegramid, `🗑 <b>Admin Removed</b>\nUser: <code>${id}</code>`);
-  send(id, "⚠️ <b>You have been removed from Admin role.</b>");
+  send(user.telegramid, `🗑 <b>Admin Removed:</b> <code>${id}</code>`);
+  send(id, "⚠️ <b>You are no longer an Admin.</b>");
 
   return true;
 }
 
-/* ============================
-        SHOW ADMIN LIST
-============================ */
+/* ------------------------------
+   SHOW ADMIN LIST
+-------------------------------- */
 function showAdminList() {
   let owner = getOwner();
 
   if (!owner) {
-    send(
-      user.telegramid,
+    send(user.telegramid,
       "⚠️ <b>Admin system not initialized.</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
     );
     return;
   }
 
   let admins = getAdmins();
-
-  if (admins.length === 0) {
-    send(user.telegramid, "⚠️ <b>No admins found.</b>");
-    return;
-  }
+  if (admins.length === 0) return send(user.telegramid, "⚠️ <b>No admins found.</b>");
 
   let msg = "👮 <b>Admins List</b>\n\n";
   let index = 1;
@@ -180,12 +164,12 @@ function showAdminList() {
   send(user.telegramid, msg);
 }
 
-/* ============================
-             PING
-============================ */
+/* ------------------------------
+   PING
+-------------------------------- */
 function ping() {
   if (options?.result) {
-    const latency = Date.now() - options.bb_options.start;
+    let latency = Date.now() - options.bb_options.start;
 
     Api.editMessageText({
       chat_id: options.result.chat.id,
@@ -197,7 +181,7 @@ function ping() {
   }
 
   Api.sendMessage({
-    chat_id: request.chat.id,
+    chat_id: user.telegramid,
     text: "<b>Ping…</b>",
     parse_mode: "HTML",
     bb_options: { start: Date.now() },
@@ -207,42 +191,43 @@ function ping() {
 
 on(LIB + "onPing", ping);
 
-/* ============================
-   ITERATION — FINAL v3
-============================ */
+/* ------------------------------
+   ITERATION (3 modes)
+-------------------------------- */
 function iteration(mode) {
-  const raw = iteration_quota;
-  if (!raw) return null;
+  const d = iteration_quota;
+  if (!d) return null;
 
   const enriched = {
-    ...raw,
-    pct: ((raw.progress / raw.limit) * 100).toFixed(2),
-    type: raw.quotum_type?.name || "Unknown",
-    base_limit: raw.quotum_type?.base_limit
+    ...d,
+    pct: ((d.progress / d.limit) * 100).toFixed(2),
+    type: d.quotum_type?.name || "Unknown",
+    base_limit: d.quotum_type?.base_limit
   };
 
-  if (typeof mode === "string" && mode.includes(",")) {
-    let keys = mode.split(",").map(s => s.trim());
-    let result = {};
-    keys.forEach(k => {
-      if (raw.hasOwnProperty(k)) result[k] = raw[k];
-    });
-    return result;
+  /* PICK MODE (multiple comma-separated keys) */
+  if (mode && mode.includes(",")) {
+    let keys = mode.split(",").map(k => k.trim());
+    let obj = {};
+    keys.forEach(k => { obj[k] = enriched[k]; });
+    return obj;
   }
 
-  if (typeof mode === "string" && mode !== "inspect") {
-    return raw[mode];
+  /* SINGLE VALUE MODE */
+  if (mode && mode !== "inspect") {
+    return enriched[mode];
   }
 
+  /* RAW INSPECT MODE */
   if (mode === "inspect") {
-    let txt = JSON.stringify(raw, null, 2);
     send(
-      request.chat.id,
-      "<b>📦 Iteration Inspect Data:</b>\n<code>" + txt + "</code>"
+      user.telegramid,
+      "<b>📦 Raw Iteration Data:</b>\n<code>" + JSON.stringify(d, null, 2) + "</code>"
     );
-    return raw;
+    return d;
   }
 
+  /* FORMATTED MESSAGE */
   const BAR = 25, FULL = "█", EMPTY = "░";
   let fill = Math.round((enriched.pct / 100) * BAR);
   let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
@@ -266,25 +251,21 @@ function iteration(mode) {
     `<b>Started:</b> ${fmt(enriched.started_at)}\n` +
     `<b>Ends:</b> ${fmt(enriched.ended_at)}`;
 
-  send(request.chat.id, msg);
+  send(user.telegramid, msg);
   return enriched;
 }
 
-/* ============================
-        EXPORT API
-============================ */
+/* ------------------------------
+   EXPORT API
+-------------------------------- */
 publish({
   ping: ping,
   iteration: iteration,
-
   setupOwner: setupOwner,
   onlyAdmin: onlyAdmin,
-
   addAdmin: addAdmin,
   removeAdmin: removeAdmin,
-
   adminList: getAdmins,
   showAdminList: showAdminList,
-
   owner: getOwner
 });
