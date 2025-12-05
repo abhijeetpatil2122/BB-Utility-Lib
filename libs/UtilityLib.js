@@ -1,24 +1,30 @@
 /*
- * Utility Library — Clean Production Version
- * Features:
- *   ping()           — latency check
- *   iteration()      — exact BB iteration quota display
- *   setupOwner()     — first-time owner setup
- *   onlyAdmin()      — admin-only gate (no throw)
- *   addAdmin()       — add admin + messages
- *   removeAdmin()    — remove admin + messages
- *   adminList()      — raw list
- *   showAdminList()  — formatted list
+ * Utility Library — Production Version
+ * Includes:
+ *    ping()
+ *    iteration()
+ *    setupOwner()
+ *    onlyAdmin()
+ *    addAdmin()
+ *    removeAdmin()
+ *    adminList()
+ *    showAdminList()
 */
 
 let LIB = "UtilityLib_"
 
-const OWNER_KEY = LIB + "owner"
+const OWNER_KEY  = LIB + "owner"
 const ADMINS_KEY = LIB + "admins"
 
-// simple wrapper
 function send(to, text) {
   Api.sendMessage({ chat_id: to, text: text, parse_mode: "HTML" })
+}
+
+/* ============================
+       INTERNAL HELPERS
+============================ */
+function getOwner() {
+  return Bot.getProperty(OWNER_KEY)
 }
 
 function getAdmins() {
@@ -29,34 +35,51 @@ function setAdmins(list) {
   Bot.setProperty(ADMINS_KEY, list, "json")
 }
 
-function getOwner() {
-  return Bot.getProperty(OWNER_KEY)
-}
-
-/* ======================================
-   OWNER SETUP — FIRST RUN REQUIRED
-====================================== */
+/* ============================
+       OWNER SETUP
+============================ */
 function setupOwner() {
   let owner = getOwner()
 
   if (owner) {
-    send(user.telegramid, `ℹ️ Owner already set: <code>${owner}</code>`)
+    send(user.telegramid, 
+      "ℹ️ <b>Owner is already set:</b>\n<code>" + owner + "</code>"
+    )
     return true
   }
 
+  // First time initialization
   Bot.setProperty(OWNER_KEY, user.telegramid, "integer")
   Bot.setProperty(ADMINS_KEY, [user.telegramid], "json")
 
-  send(user.telegramid, "🎉 <b>You are now the bot owner & first admin.</b>")
+  send(
+    user.telegramid,
+    "🎉 <b>Owner Setup Complete!</b>\n" +
+    "You are now the <b>Owner</b> and also the <b>first Admin</b>."
+  )
+
   return true
 }
 
-/* ======================================
-   ADMIN CHECK — CLEAN RETURN, NO THROW
-====================================== */
+/* ============================
+       ADMIN CHECK
+============================ */
 function onlyAdmin() {
-  let admins = getAdmins()
+  let owner = getOwner()
 
+  // If owner not initialized → block all admin operations
+  if (!owner) {
+    send(
+      user.telegramid,
+      "⚠️ <b>Admin System Not Set Up!</b>\n\n" +
+      "➡️ Run this command first:\n" +
+      "<code>Libs.UtilityLib.setupOwner()</code>\n\n" +
+      "This will set <b>you</b> as the Owner and enable admin tools."
+    )
+    return false
+  }
+
+  let admins = getAdmins()
   if (!admins.includes(user.telegramid)) {
     send(user.telegramid, "❌ <b>You are not an admin.</b>")
     return false
@@ -65,105 +88,136 @@ function onlyAdmin() {
   return true
 }
 
-/* ======================================
-            ADD ADMIN
-====================================== */
+/* ============================
+        ADD ADMIN
+============================ */
 function addAdmin(id) {
   if (!onlyAdmin()) return false
 
   id = parseInt(id)
+
   if (!id) {
-    send(user.telegramid, "⚠️ Invalid user ID.")
+    send(user.telegramid, "⚠️ <b>Invalid User ID</b>")
     return false
   }
 
   let admins = getAdmins()
 
   if (admins.includes(id)) {
-    send(user.telegramid, "⚠️ User is already an admin.")
+    send(user.telegramid, "⚠️ <b>User is already an admin.</b>")
     return false
   }
 
   admins.push(id)
   setAdmins(admins)
 
-  send(user.telegramid, `✅ Added admin: <code>${id}</code>`)
-  send(id, `🎉 <b>You are now an admin!</b>`)
+  send(
+    user.telegramid,
+    "✅ <b>Admin Added Successfully</b>\nUser: <code>" + id + "</code>"
+  )
+
+  send(
+    id,
+    "🎉 <b>You have been promoted to Admin!</b>\n" +
+    "You now have access to admin-only commands."
+  )
 
   return true
 }
 
-/* ======================================
-            REMOVE ADMIN
-====================================== */
+/* ============================
+        REMOVE ADMIN
+============================ */
 function removeAdmin(id) {
   if (!onlyAdmin()) return false
 
   id = parseInt(id)
+
   if (!id) {
-    send(user.telegramid, "⚠️ Invalid user ID.")
+    send(user.telegramid, "⚠️ <b>Invalid User ID</b>")
     return false
   }
 
   let owner = getOwner()
+
   if (id === owner) {
-    send(user.telegramid, "❌ Cannot remove the bot owner.")
+    send(user.telegramid, "❌ <b>You cannot remove the Owner.</b>")
     return false
   }
 
   let admins = getAdmins()
 
   if (!admins.includes(id)) {
-    send(user.telegramid, "⚠️ User is not an admin.")
+    send(user.telegramid, "⚠️ <b>User is not an admin.</b>")
     return false
   }
 
   admins = admins.filter(a => a !== id)
   setAdmins(admins)
 
-  send(user.telegramid, `🗑 Removed admin: <code>${id}</code>`)
-  send(id, `⚠️ <b>You are no longer an admin.</b>`)
+  send(
+    user.telegramid,
+    "🗑 <b>Admin Removed</b>\nUser: <code>" + id + "</code>"
+  )
+
+  send(id, "⚠️ <b>You have been removed from Admin role.</b>")
 
   return true
 }
 
-/* ======================================
-              SHOW ADMIN LIST
-====================================== */
+/* ============================
+        ADMIN LIST
+============================ */
 function showAdminList() {
-  let admins = getAdmins()
   let owner = getOwner()
 
   if (!owner) {
-    send(user.telegramid, "⚠️ No owner set. Run /setupowner first.")
+    send(
+      user.telegramid,
+      "⚠️ <b>Admin system not initialized.</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
+    )
     return
   }
+
+  let admins = getAdmins()
 
   if (admins.length === 0) {
-    send(user.telegramid, "⚠️ No admins found.")
+    send(user.telegramid, "⚠️ <b>No admins found.</b>")
     return
   }
 
-  let txt = "👮 <b>Admins List</b>\n\n"
-  let n = 1
+  let msg = "👮 <b>Admins List</b>\n\n"
+
+  let ownerCount = 0
+  let adminCount = 0
+  let index = 1
 
   admins.forEach(id => {
-    let tag = id === owner ? " (Owner)" : ""
-    txt += `${n}. <code>${id}</code>${tag}\n`
-    n++
+
+    let role = ""
+    if (id === owner) {
+      role = " (<b>Owner</b>)"
+      ownerCount++
+    } else {
+      role = " (<i>Admin</i> by Owner)"
+      adminCount++
+    }
+
+    msg += `${index}. <code>${id}</code>${role}\n`
+    index++
   })
 
-  txt += `\n<b>Total:</b> ${admins.length}`
+  msg += `\n<b>Total:</b> ${admins.length} | <b>Owner:</b> ${ownerCount} | <b>Admins:</b> ${adminCount}`
 
-  send(user.telegramid, txt)
+  send(user.telegramid, msg)
 }
 
-/* ======================================
-                PING TEST
-====================================== */
+/* ============================
+           PING
+============================ */
 function ping() {
   if (options?.result) {
-    let latency = Date.now() - options.bb_options.start
+    const latency = Date.now() - options.bb_options.start
 
     Api.editMessageText({
       chat_id: options.result.chat.id,
@@ -185,12 +239,11 @@ function ping() {
 
 on(LIB + "onPing", ping)
 
-/* ======================================
-        ITERATION — ORIGINAL FORMAT
-====================================== */
+/* ============================
+        ITERATION (ORIGINAL)
+============================ */
 function iteration() {
   const d = iteration_quota
-
   if (!d) {
     send(request.chat.id, "<b>❌ Unable to load iteration quota.</b>")
     return
@@ -210,25 +263,25 @@ function iteration() {
   }
 
   let msg =
-    `⚙️ BB Iteration Quota\n\n` +
-    `ID: ${d.id}\n` +
-    `Type: ${d.quotum_type?.name}\n` +
-    `Base Limit: ${d.quotum_type?.base_limit}\n` +
-    `Has Ads Plan: ${d.have_ads}\n` +
-    `Extra Points: ${d.extra_points}\n\n` +
-    `Limit: ${limit}\n` +
-    `Used: ${used}\n` +
-    `Usage: ${pct}%\n\n` +
+    `⚙️ <b>BB Iteration Quota</b>\n\n` +
+    `<b>ID:</b> <code>${d.id}</code>\n` +
+    `<b>Type:</b> <code>${d.quotum_type?.name}</code>\n` +
+    `<b>Base Limit:</b> <code>${d.quotum_type?.base_limit}</code>\n` +
+    `<b>Has Ads Plan:</b> <code>${d.have_ads}</code>\n` +
+    `<b>Extra Points:</b> <code>${d.extra_points}</code>\n\n` +
+    `<b>Limit:</b> <code>${limit}</code>\n` +
+    `<b>Used:</b> <code>${used}</code>\n` +
+    `<b>Usage:</b> <code>${pct}%</code>\n\n` +
     `${bar}\n\n` +
-    `Started: ${fmt(d.started_at)}\n` +
-    `Ends: ${fmt(d.ended_at)}`
+    `<b>Started:</b> ${fmt(d.started_at)}\n` +
+    `<b>Ends:</b> ${fmt(d.ended_at)}`
 
   send(request.chat.id, msg)
 }
 
-/* ======================================
-               EXPORT
-====================================== */
+/* ============================
+        EXPORT PUBLIC API
+============================ */
 publish({
   ping: ping,
   iteration: iteration,
