@@ -1,8 +1,8 @@
 /*
- * Utility Library — FINAL v2
+ * Utility Library — FINAL v3
  * Features:
  *    ping()
- *    iteration(mode)  ← UPDATED (3-mode: formatted, raw, single value)
+ *    iteration(mode)  ← 3-mode: formatted, inspect, pick values
  *    setupOwner()
  *    onlyAdmin()
  *    addAdmin()
@@ -208,36 +208,41 @@ function ping() {
 on(LIB + "onPing", ping);
 
 /* ============================
-   ITERATION — 3 MODE VERSION
+   ITERATION — FINAL v3
 ============================ */
 function iteration(mode) {
-  const d = iteration_quota;
-  if (!d) return null;
+  const raw = iteration_quota;
+  if (!raw) return null;
 
-  // Build enriched object with computed fields
   const enriched = {
-    ...d,
-    pct: ((d.progress / d.limit) * 100).toFixed(2),
-    type: d.quotum_type?.name || "Unknown",
-    base_limit: d.quotum_type?.base_limit
+    ...raw,
+    pct: ((raw.progress / raw.limit) * 100).toFixed(2),
+    type: raw.quotum_type?.name || "Unknown",
+    base_limit: raw.quotum_type?.base_limit
   };
 
-  /* ------------- MODE 3: SINGLE VALUE -------------- */
-  if (mode && typeof mode === "string" && mode !== "raw") {
-    return enriched[mode];
+  if (typeof mode === "string" && mode.includes(",")) {
+    let keys = mode.split(",").map(s => s.trim());
+    let result = {};
+    keys.forEach(k => {
+      if (raw.hasOwnProperty(k)) result[k] = raw[k];
+    });
+    return result;
   }
 
-  /* ------------- MODE 2: RAW JSON OUTPUT -------------- */
-  if (mode === "raw") {
-    let raw = JSON.stringify(d, null, 2);
+  if (typeof mode === "string" && mode !== "inspect") {
+    return raw[mode];
+  }
+
+  if (mode === "inspect") {
+    let txt = JSON.stringify(raw, null, 2);
     send(
       request.chat.id,
-      "<b>📦 Raw Iteration Data:</b>\n<code>" + raw + "</code>"
+      "<b>📦 Iteration Inspect Data:</b>\n<code>" + txt + "</code>"
     );
-    return d;
+    return raw;
   }
 
-  /* ------------- MODE 1: FORMATTED MESSAGE -------------- */
   const BAR = 25, FULL = "█", EMPTY = "░";
   let fill = Math.round((enriched.pct / 100) * BAR);
   let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
@@ -270,8 +275,6 @@ function iteration(mode) {
 ============================ */
 publish({
   ping: ping,
-
-  // iteration has 3 modes
   iteration: iteration,
 
   setupOwner: setupOwner,
