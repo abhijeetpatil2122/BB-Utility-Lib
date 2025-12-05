@@ -1,8 +1,8 @@
 /*
- * Utility Library — FINAL v1
+ * Utility Library — FINAL v2
  * Features:
  *    ping()
- *    iteration()  ← updated (sends formatted msg + returns object)
+ *    iteration(mode)  ← UPDATED (3-mode: formatted, raw, single value)
  *    setupOwner()
  *    onlyAdmin()
  *    addAdmin()
@@ -41,7 +41,8 @@ function setupOwner() {
   let owner = getOwner();
 
   if (owner) {
-    send(user.telegramid,
+    send(
+      user.telegramid,
       "ℹ️ <b>Owner already set:</b>\n<code>" + owner + "</code>"
     );
     return true;
@@ -174,6 +175,8 @@ function showAdminList() {
     index++;
   });
 
+  msg += `\n<b>Total:</b> ${admins.length} | <b>Owner:</b> 1 | <b>Admins:</b> ${admins.length - 1}`;
+
   send(user.telegramid, msg);
 }
 
@@ -205,20 +208,38 @@ function ping() {
 on(LIB + "onPing", ping);
 
 /* ============================
-      ITERATION — FINAL FIX
+   ITERATION — 3 MODE VERSION
 ============================ */
-function iteration() {
+function iteration(mode) {
   const d = iteration_quota;
   if (!d) return null;
 
-  // attach helpers
-  d.pct = ((d.progress / d.limit) * 100).toFixed(2);
-  d.type = d.quotum_type?.name || "Unknown";
-  d.base_limit = d.quotum_type?.base_limit;
+  // Build enriched object with computed fields
+  const enriched = {
+    ...d,
+    pct: ((d.progress / d.limit) * 100).toFixed(2),
+    type: d.quotum_type?.name || "Unknown",
+    base_limit: d.quotum_type?.base_limit
+  };
 
-  /* ---- SEND FORMATTED MESSAGE (ONLY ON DIRECT CALL) ---- */
+  /* ------------- MODE 3: SINGLE VALUE -------------- */
+  if (mode && typeof mode === "string" && mode !== "raw") {
+    return enriched[mode];
+  }
+
+  /* ------------- MODE 2: RAW JSON OUTPUT -------------- */
+  if (mode === "raw") {
+    let raw = JSON.stringify(d, null, 2);
+    send(
+      request.chat.id,
+      "<b>📦 Raw Iteration Data:</b>\n<code>" + raw + "</code>"
+    );
+    return d;
+  }
+
+  /* ------------- MODE 1: FORMATTED MESSAGE -------------- */
   const BAR = 25, FULL = "█", EMPTY = "░";
-  let fill = Math.round((d.pct / 100) * BAR);
+  let fill = Math.round((enriched.pct / 100) * BAR);
   let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
 
   function fmt(t) {
@@ -228,22 +249,20 @@ function iteration() {
 
   let msg =
     `⚙️ <b>BB Iteration Quota</b>\n\n` +
-    `<b>ID:</b> <code>${d.id}</code>\n` +
-    `<b>Type:</b> <code>${d.type}</code>\n` +
-    `<b>Base Limit:</b> <code>${d.base_limit}</code>\n` +
-    `<b>Ads Enabled:</b> <code>${d.have_ads}</code>\n` +
-    `<b>Extra Points:</b> <code>${d.extra_points}</code>\n\n` +
-    `<b>Limit:</b> <code>${d.limit}</code>\n` +
-    `<b>Used:</b> <code>${d.progress}</code>\n` +
-    `<b>Usage:</b> <code>${d.pct}%</code>\n\n` +
+    `<b>ID:</b> <code>${enriched.id}</code>\n` +
+    `<b>Type:</b> <code>${enriched.type}</code>\n` +
+    `<b>Base Limit:</b> <code>${enriched.base_limit}</code>\n` +
+    `<b>Ads Enabled:</b> <code>${enriched.have_ads}</code>\n` +
+    `<b>Extra Points:</b> <code>${enriched.extra_points}</code>\n\n` +
+    `<b>Limit:</b> <code>${enriched.limit}</code>\n` +
+    `<b>Used:</b> <code>${enriched.progress}</code>\n` +
+    `<b>Usage:</b> <code>${enriched.pct}%</code>\n\n` +
     `${bar}\n\n` +
-    `<b>Started:</b> ${fmt(d.started_at)}\n` +
-    `<b>Ends:</b> ${fmt(d.ended_at)}`;
+    `<b>Started:</b> ${fmt(enriched.started_at)}\n` +
+    `<b>Ends:</b> ${fmt(enriched.ended_at)}`;
 
   send(request.chat.id, msg);
-
-  /* --- Always return raw object --- */
-  return d;
+  return enriched;
 }
 
 /* ============================
@@ -251,6 +270,8 @@ function iteration() {
 ============================ */
 publish({
   ping: ping,
+
+  // iteration has 3 modes
   iteration: iteration,
 
   setupOwner: setupOwner,
