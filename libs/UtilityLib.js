@@ -1,13 +1,12 @@
 /*
- * Utility Library — Production Version
+ * Utility Library — FINAL v1
  * Features:
  *    ping()
- *    iteration()   <-- updated (returns raw object + prints formatted view)
+ *    iteration()  ← updated (sends formatted msg + returns object)
  *    setupOwner()
  *    onlyAdmin()
  *    addAdmin()
  *    removeAdmin()
- *    adminList()
  *    showAdminList()
 */
 
@@ -42,8 +41,7 @@ function setupOwner() {
   let owner = getOwner();
 
   if (owner) {
-    send(
-      user.telegramid,
+    send(user.telegramid,
       "ℹ️ <b>Owner already set:</b>\n<code>" + owner + "</code>"
     );
     return true;
@@ -54,29 +52,27 @@ function setupOwner() {
 
   send(
     user.telegramid,
-    "🎉 <b>Owner Setup Complete!</b>\nYou are now the <b>Owner</b> and first <b>Admin</b>."
+    "🎉 <b>Owner Setup Complete!</b>\n" +
+    "You are now the <b>Owner</b> and first <b>Admin</b>."
   );
 
   return true;
 }
 
 /* ============================
-       ADMIN CHECK
+        ADMIN CHECK
 ============================ */
 function onlyAdmin() {
   let owner = getOwner();
-
   if (!owner) {
     send(
       user.telegramid,
-      "⚠️ <b>Admin System Not Initialized</b>\n" +
-      "Run:\n<code>Libs.UtilityLib.setupOwner()</code>"
+      "⚠️ <b>Admin System Not Set Up!</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
     );
     return false;
   }
 
   let admins = getAdmins();
-
   if (!admins.includes(user.telegramid)) {
     send(user.telegramid, "❌ <b>You are not an admin.</b>");
     return false;
@@ -94,29 +90,22 @@ function addAdmin(id) {
   id = parseInt(id);
 
   if (!id) {
-    send(user.telegramid, "⚠️ <b>Invalid User ID</b>");
+    send(user.telegramid, "⚠️ <b>Invalid Telegram ID</b>");
     return false;
   }
 
   let admins = getAdmins();
 
   if (admins.includes(id)) {
-    send(user.telegramid, "⚠️ <b>User already admin.</b>");
+    send(user.telegramid, "⚠️ <b>User is already an admin.</b>");
     return false;
   }
 
   admins.push(id);
   setAdmins(admins);
 
-  send(
-    user.telegramid,
-    "✅ <b>Admin Added</b>\nUser: <code>" + id + "</code>"
-  );
-
-  send(
-    id,
-    "🎉 <b>You have been promoted to Admin!</b>"
-  );
+  send(user.telegramid, `✅ <b>Admin Added</b>\nUser: <code>${id}</code>`);
+  send(id, "🎉 <b>You have been promoted to Admin!</b>");
 
   return true;
 }
@@ -130,39 +119,33 @@ function removeAdmin(id) {
   id = parseInt(id);
 
   if (!id) {
-    send(user.telegramid, "⚠️ <b>Invalid User ID</b>");
+    send(user.telegramid, "⚠️ <b>Invalid Telegram ID</b>");
     return false;
   }
 
   let owner = getOwner();
-
   if (id === owner) {
     send(user.telegramid, "❌ <b>You cannot remove the Owner.</b>");
     return false;
   }
 
   let admins = getAdmins();
-
   if (!admins.includes(id)) {
-    send(user.telegramid, "⚠️ <b>User is not admin.</b>");
+    send(user.telegramid, "⚠️ <b>User is not an admin.</b>");
     return false;
   }
 
   admins = admins.filter(a => a !== id);
   setAdmins(admins);
 
-  send(
-    user.telegramid,
-    "🗑 <b>Admin Removed</b>\nUser: <code>" + id + "</code>"
-  );
-
+  send(user.telegramid, `🗑 <b>Admin Removed</b>\nUser: <code>${id}</code>`);
   send(id, "⚠️ <b>You have been removed from Admin role.</b>");
 
   return true;
 }
 
 /* ============================
-        ADMIN LIST
+        SHOW ADMIN LIST
 ============================ */
 function showAdminList() {
   let owner = getOwner();
@@ -170,7 +153,7 @@ function showAdminList() {
   if (!owner) {
     send(
       user.telegramid,
-      "⚠️ <b>Admin system is not set up.</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
+      "⚠️ <b>Admin system not initialized.</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
     );
     return;
   }
@@ -195,7 +178,7 @@ function showAdminList() {
 }
 
 /* ============================
-           PING
+             PING
 ============================ */
 function ping() {
   if (options?.result) {
@@ -222,22 +205,18 @@ function ping() {
 on(LIB + "onPing", ping);
 
 /* ============================
-        ITERATION (UPDATED)
+      ITERATION — FINAL FIX
 ============================ */
 function iteration() {
   const d = iteration_quota;
+  if (!d) return null;
 
-  if (!d) {
-    send(request.chat.id, "<b>❌ Unable to load iteration quota.</b>");
-    return null;
-  }
-
-  // Add useful derived values
+  // attach helpers
   d.pct = ((d.progress / d.limit) * 100).toFixed(2);
   d.type = d.quotum_type?.name || "Unknown";
   d.base_limit = d.quotum_type?.base_limit;
 
-  // Create progress bar
+  /* ---- SEND FORMATTED MESSAGE (ONLY ON DIRECT CALL) ---- */
   const BAR = 25, FULL = "█", EMPTY = "░";
   let fill = Math.round((d.pct / 100) * BAR);
   let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
@@ -247,7 +226,6 @@ function iteration() {
     catch { return t; }
   }
 
-  // FINAL formatted message
   let msg =
     `⚙️ <b>BB Iteration Quota</b>\n\n` +
     `<b>ID:</b> <code>${d.id}</code>\n` +
@@ -264,12 +242,12 @@ function iteration() {
 
   send(request.chat.id, msg);
 
-  // ALWAYS return raw object
+  /* --- Always return raw object --- */
   return d;
 }
 
 /* ============================
-        EXPORT PUBLIC API
+        EXPORT API
 ============================ */
 publish({
   ping: ping,
