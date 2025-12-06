@@ -1,271 +1,306 @@
-/*
- * Utility Library — v4 (Stable Production)
- * Features:
- *   ping()
- *   iteration(mode)   // formatted, inspect, pick-mode
- *   setupOwner()
- *   onlyAdmin()
- *   addAdmin()
- *   removeAdmin()
- *   showAdminList()
- */
+// UtilityLib v3 - Membership module
+// Exposes:
+// membershipSetup(), membershipUpdate(arr), membershipRemove(idx), membershipList()
+// membershipCheck(), membershipRawCheck()
+// setJoinMessage(text), getJoinMessage(), getRequiredChannels()
 
-let LIB = "UtilityLib_";
+const LIB_PREFIX = "UtilityLib_MCL_";
+const KEY_CH = "UtilityLib_membership_channels";
+const KEY_MSG = "UtilityLib_membership_join_msg";
+const KEY_DEBUG = "UtilityLib_membership_debug";
+const SESSION_USER_PREFIX = "UtilityLib_mcl_user_";
 
-const OWNER_KEY  = LIB + "owner";
-const ADMINS_KEY = LIB + "admins";
-
-/* Basic sender */
-function send(to, text) {
-  Api.sendMessage({ chat_id: to, text: text, parse_mode: "HTML" });
+function _send(chat_id, text, reply_markup) {
+  const p = { chat_id, text, parse_mode: "HTML" };
+  if (reply_markup) p.reply_markup = reply_markup;
+  Api.sendMessage(p);
+}
+function _dbg(...args) {
+  if (Bot.getProperty(KEY_DEBUG)) {
+    try {
+      Api.sendMessage({
+        chat_id: request.chat?.id || (user && user.telegramid),
+        text: "<b>UtilityLib MCL DEBUG</b>\n<pre>" + JSON.stringify(args, null, 2) + "</pre>",
+        parse_mode: "HTML"
+      });
+    } catch (e) {}
+  }
 }
 
-/* Helpers */
-function getOwner() { return Bot.getProperty(OWNER_KEY); }
-function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
-function setAdmins(list) { Bot.setProperty(ADMINS_KEY, list, "json"); }
-function isNumeric(v) { return /^\d+$/.test(String(v)); }
-
-/* ------------------------------
-   OWNER SETUP (run once)
--------------------------------- */
-function setupOwner() {
-  let owner = getOwner();
-
-  if (owner) {
-    send(user.telegramid, "ℹ️ <b>Owner already set:</b> <code>" + owner + "</code>");
+/* -----------------------------
+   Storage helpers
+   ----------------------------- */
+function membershipSetup() {
+  if (!Bot.getProperty(KEY_CH)) {
+    Bot.setProperty(KEY_CH, [], "json");
+    Bot.setProperty(KEY_MSG, "📢 <b>Please join the required channels:</b>", "string");
+    Bot.setProperty(KEY_DEBUG, false, "boolean");
+    _send(user.telegramid, "✅ Membership system initialized.");
     return true;
   }
-
-  Bot.setProperty(OWNER_KEY, user.telegramid, "integer");
-  Bot.setProperty(ADMINS_KEY, [user.telegramid], "json");
-
-  send(user.telegramid,
-    "🎉 <b>Owner Setup Complete!</b>\nYou are now the <b>Owner</b> & first <b>Admin</b>."
-  );
-
+  _send(user.telegramid, "ℹ️ Membership system already initialized.");
   return true;
 }
 
-/* ------------------------------
-   ADMIN CHECK
--------------------------------- */
-function onlyAdmin() {
-  let owner = getOwner();
+function _getChannels() {
+  return Bot.getProperty(KEY_CH) || [];
+}
+function membershipList() {
+  return _getChannels();
+}
+function getRequiredChannels() { return membershipList(); }
 
-  if (!owner) {
-    send(user.telegramid,
-      "⚠️ <b>Admin System Not Set!</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
-    );
-    return false;
+function _normalizeItem(item) {
+  if (typeof item === "string") {
+    const u = item.trim().replace(/^@+/, "");
+    if (!u) throw new Error("Invalid channel username");
+    return { type: "public", username: u };
   }
-
-  let admins = getAdmins();
-
-  if (!admins.includes(user.telegramid)) {
-    send(user.telegramid, "❌ <b>You are not an admin.</b>");
-    return false;
+  if (typeof item === "object" && item !== null) {
+    if (item.username) return { type: "public", username: ("" + item.username).replace(/^@+/, "") };
+    if (item.id) return { type: "private", id: "" + item.id, invite: item.invite || null, title: item.title || null };
   }
-
-  return true;
+  throw new Error("Invalid channel format");
 }
 
-/* ------------------------------
-   ADD ADMIN
--------------------------------- */
-function addAdmin(id) {
-  if (!onlyAdmin()) return false;
-
-  if (!isNumeric(id)) {
-    send(user.telegramid, "⚠️ <b>Telegram ID must be numeric.</b>");
-    return false;
-  }
-
-  id = Number(id);
-
-  let admins = getAdmins();
-
-  if (admins.includes(id)) {
-    send(user.telegramid, "⚠️ <b>User is already admin.</b>");
-    return false;
-  }
-
-  admins.push(id);
-  setAdmins(admins);
-
-  send(user.telegramid, `✅ <b>Admin Added:</b> <code>${id}</code>`);
-  send(id, "🎉 <b>You are now an Admin!</b>");
-
-  return true;
+/* Replace all channels (arr = array of items) */
+function membershipUpdate(arr) {
+  if (!Array.isArray(arr)) throw new Error("membershipUpdate: array required");
+  if (arr.length > 10) throw new Error("membershipUpdate: max 10 channels allowed");
+  const out = arr.map(_normalizeItem);
+  Bot.setProperty(KEY_CH, out, "json");
+  return out;
 }
 
-/* ------------------------------
-   REMOVE ADMIN
--------------------------------- */
-function removeAdmin(id) {
-  if (!onlyAdmin()) return false;
-
-  if (!isNumeric(id)) {
-    send(user.telegramid, "⚠️ <b>Telegram ID must be numeric.</b>");
-    return false;
-  }
-
-  id = Number(id);
-
-  let owner = getOwner();
-  if (id === owner) {
-    send(user.telegramid, "❌ <b>You cannot remove the Owner.</b>");
-    return false;
-  }
-
-  let admins = getAdmins();
-
-  if (!admins.includes(id)) {
-    send(user.telegramid, "⚠️ <b>User is not an admin.</b>");
-    return false;
-  }
-
-  admins = admins.filter(a => a !== id);
-  setAdmins(admins);
-
-  send(user.telegramid, `🗑 <b>Admin Removed:</b> <code>${id}</code>`);
-  send(id, "⚠️ <b>You are no longer an Admin.</b>");
-
-  return true;
+/* Remove channel by index (0-based) */
+function membershipRemove(index) {
+  const cur = _getChannels();
+  const idx = parseInt(index);
+  if (isNaN(idx) || idx < 0 || idx >= cur.length) throw new Error("membershipRemove: invalid index");
+  cur.splice(idx, 1);
+  Bot.setProperty(KEY_CH, cur, "json");
+  return cur;
 }
 
-/* ------------------------------
-   SHOW ADMIN LIST
--------------------------------- */
-function showAdminList() {
-  let owner = getOwner();
+/* join message header */
+function setJoinMessage(txt) {
+  Bot.setProperty(KEY_MSG, txt, "string");
+  return txt;
+}
+function getJoinMessage() {
+  return Bot.getProperty(KEY_MSG) || "📢 <b>Please join the required channels:</b>";
+}
+function setDebug(flag) { Bot.setProperty(KEY_DEBUG, !!flag, "boolean"); }
 
-  if (!owner) {
-    send(user.telegramid,
-      "⚠️ <b>Admin system not initialized.</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
-    );
+/* -----------------------------
+   Buttons builder (2 per row)
+   ----------------------------- */
+function _buildButtons(channels) {
+  const kb = [];
+  for (let i = 0; i < channels.length; i += 2) {
+    const row = [];
+    for (let j = 0; j < 2; j++) {
+      const idx = i + j;
+      if (idx >= channels.length) break;
+      const c = channels[idx];
+      const label = c.title || (c.type === "public" ? "@" + c.username : "Private");
+      if (c.type === "public") row.push({ text: label, url: "https://t.me/" + c.username });
+      else if (c.type === "private" && c.invite) row.push({ text: label, url: c.invite });
+      else row.push({ text: label, callback_data: "/" + LIB_PREFIX + "noinvite " + idx });
+    }
+    if (row.length) kb.push(row);
+  }
+  kb.push([{ text: "🔄 Check Again", callback_data: "/" + LIB_PREFIX + "check" }]);
+  return { inline_keyboard: kb };
+}
+
+/* UI: show message + buttons */
+function _showUI(chat_id, channels) {
+  _send(chat_id, getJoinMessage() + "\n\n" + _formatChannelsList(channels), _buildButtons(channels));
+}
+
+/* helper to render channels list as lines with HTML links when possible */
+function _formatChannelsList(channels) {
+  if (!channels || channels.length === 0) return "";
+  let txt = "";
+  channels.forEach((c, i) => {
+    const idx = i + 1;
+    if (c.type === "public") txt += `${idx}. @${c.username}\n`;
+    else if (c.type === "private") {
+      if (c.invite) txt += `${idx}. <a href="${c.invite}">${c.title || c.id}</a>\n`;
+      else txt += `${idx}. ${c.title || c.id} (invite link not set)\n`;
+    }
+  });
+  return txt;
+}
+
+/* -----------------------------
+   Core check flow
+   membershipCheck(): returns boolean
+   membershipRawCheck(): returns object with details
+   Both perform checks (spawn background getChatMember calls) and finalize results.
+   ----------------------------- */
+
+/* create and store session in user property */
+function _startSession(uid) {
+  const channels = _getChannels();
+  if (!channels || channels.length === 0) return { ok: true, details: [], missing: [] }; // nothing required
+  const sid = Date.now();
+  const uKey = SESSION_USER_PREFIX + uid;
+  const session = { id: sid, pending: channels.length, results: {}, channelsCount: channels.length };
+  User.setProperty(uKey, session, "json");
+  // spawn background tasks
+  channels.forEach(c => {
+    const chatKey = c.type === "public" ? "@" + c.username : c.id;
+    Bot.run({ command: LIB_PREFIX + "checkMember " + chatKey, options: { bb_options: { time: sid }, channel_meta: c }, run_after: 1 });
+  });
+  return session;
+}
+
+/* finalize session (called internally when background tasks complete) */
+on(LIB_PREFIX + "finalize", function () {
+  const sid = parseInt(params.split(" ")[0]);
+  const uid = user.telegramid;
+  const uKey = SESSION_USER_PREFIX + uid;
+  const session = User.getProperty(uKey);
+  if (!session || session.id !== sid) {
+    _dbg("finalize: session mismatch", sid, session && session.id);
     return;
   }
-
-  let admins = getAdmins();
-  if (admins.length === 0) return send(user.telegramid, "⚠️ <b>No admins found.</b>");
-
-  let msg = "👮 <b>Admins List</b>\n\n";
-  let index = 1;
-
-  admins.forEach(id => {
-    let role = id === owner ? " (<b>Owner</b>)" : " (<i>Admin</i>)";
-    msg += `${index}. <code>${id}</code>${role}\n`;
-    index++;
+  const channels = _getChannels();
+  const results = session.results || {};
+  const joined = [], missing = [];
+  channels.forEach(c => {
+    const key = c.type === "public" ? "@" + c.username : c.id;
+    const r = results[key];
+    if (r && r.joined) joined.push({ channel: c, status: r.status });
+    else missing.push({ channel: c, status: r ? r.status : null });
   });
 
-  msg += `\n<b>Total:</b> ${admins.length} | <b>Owner:</b> 1 | <b>Admins:</b> ${admins.length - 1}`;
+  // store last-results in user prop for membershipRawCheck to return
+  session.summary = { joined, missing, results };
+  User.setProperty(uKey, session, "json");
 
-  send(user.telegramid, msg);
-}
+  // send UI to user if missing
+  if (missing.length) _showUI(uid, channels);
+  else _send(uid, "<b>✅ You are joined to all required channels.</b>");
 
-/* ------------------------------
-   PING
--------------------------------- */
-function ping() {
-  if (options?.result) {
-    let latency = Date.now() - options.bb_options.start;
+  // nothing returned here (background)
+});
 
-    Api.editMessageText({
-      chat_id: options.result.chat.id,
-      message_id: options.result.message_id,
-      text: `🏓 <b>${latency} ms</b>`,
-      parse_mode: "HTML"
-    });
-    return;
-  }
-
-  Api.sendMessage({
-    chat_id: user.telegramid,
-    text: "<b>Ping…</b>",
-    parse_mode: "HTML",
-    bb_options: { start: Date.now() },
-    on_result: LIB + "onPing"
+/* worker that calls getChatMember */
+on(LIB_PREFIX + "checkMember", function () {
+  const chatKey = params.split(" ")[0];
+  Api.getChatMember({
+    chat_id: chatKey,
+    user_id: user.telegramid,
+    on_result: LIB_PREFIX + "onMemberResult " + chatKey,
+    on_error: LIB_PREFIX + "onMemberError " + chatKey,
+    bb_options: options.bb_options
   });
+});
+
+on(LIB_PREFIX + "onMemberResult", function () {
+  const chatKey = params.split(" ")[0];
+  const uid = user.telegramid;
+  const uKey = SESSION_USER_PREFIX + uid;
+  let session = User.getProperty(uKey) || { id: options.bb_options?.time || Date.now(), pending: 0, results: {} };
+  const status = (options.result && options.result.status) || null;
+  const joined = ["member", "administrator", "creator"].includes(status);
+  session.results[chatKey] = { joined, status };
+  session.pending = Math.max((session.pending || _getChannels().length) - 1, 0);
+  User.setProperty(uKey, session, "json");
+  if (session.pending === 0) Bot.run({ command: LIB_PREFIX + "finalize " + session.id, run_after: 1 });
+});
+
+on(LIB_PREFIX + "onMemberError", function () {
+  const chatKey = params.split(" ")[0];
+  const uid = user.telegramid;
+  const uKey = SESSION_USER_PREFIX + uid;
+  let session = User.getProperty(uKey) || { id: options.bb_options?.time || Date.now(), pending: 0, results: {} };
+  session.results[chatKey] = { joined: false, status: "error", error: options };
+  session.pending = Math.max((session.pending || _getChannels().length) - 1, 0);
+  User.setProperty(uKey, session, "json");
+  if (session.pending === 0) Bot.run({ command: LIB_PREFIX + "finalize " + session.id, run_after: 1 });
+});
+
+/* callback for inline: check again */
+on("/" + LIB_PREFIX + "check", function () {
+  if (!user) return;
+  membershipCheck(); // call directly
+});
+
+/* callback for inline: user clicked a private channel without invite */
+on("/" + LIB_PREFIX + "noinvite", function () {
+  const idx = parseInt(params.split(" ")[0]);
+  const ch = _getChannels()[idx];
+  if (!ch) return _send(user.telegramid, "⚠️ Channel not found.");
+  _send(user.telegramid, "⚠️ This private channel has no invite link. Please contact the bot owner to get an invite.");
+  // optionally notify owner if set
+  try {
+    if (bot && bot.owner) Api.sendMessage({ chat_id: bot.owner, text: `<b>Notice:</b> user ${user.telegramid} needs invite for channel ${ch.id}`, parse_mode: "HTML" });
+  } catch(e){}
+});
+
+/* -----------------------------
+   Public API
+   membershipCheck(): starts check and returns boolean
+     - If no channels configured => returns true
+     - If channels configured: starts session and returns false immediately (UI shown).
+       The final result will be sent to user when checks complete.
+   membershipRawCheck(): starts full check and returns last summary object (if available)
+   ----------------------------- */
+function membershipCheck() {
+  const channels = _getChannels();
+  if (!channels || channels.length === 0) return true;
+  const uid = user.telegramid;
+  const session = _startSession(uid);
+  // If channels exist we started background checks and show UI; return false now.
+  return false;
 }
 
-on(LIB + "onPing", ping);
-
-/* ------------------------------
-   ITERATION (3 modes)
--------------------------------- */
-function iteration(mode) {
-  const d = iteration_quota;
-  if (!d) return null;
-
-  const enriched = {
-    ...d,
-    pct: ((d.progress / d.limit) * 100).toFixed(2),
-    type: d.quotum_type?.name || "Unknown",
-    base_limit: d.quotum_type?.base_limit
-  };
-
-  /* PICK MODE (multiple comma-separated keys) */
-  if (mode && mode.includes(",")) {
-    let keys = mode.split(",").map(k => k.trim());
-    let obj = {};
-    keys.forEach(k => { obj[k] = enriched[k]; });
-    return obj;
-  }
-
-  /* SINGLE VALUE MODE */
-  if (mode && mode !== "inspect") {
-    return enriched[mode];
-  }
-
-  /* RAW INSPECT MODE */
-  if (mode === "inspect") {
-    send(
-      user.telegramid,
-      "<b>📦 Raw Iteration Data:</b>\n<code>" + JSON.stringify(d, null, 2) + "</code>"
-    );
-    return d;
-  }
-
-  /* FORMATTED MESSAGE */
-  const BAR = 25, FULL = "█", EMPTY = "░";
-  let fill = Math.round((enriched.pct / 100) * BAR);
-  let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
-
-  function fmt(t) {
-    try { return new Date(t).toLocaleString(); }
-    catch { return t; }
-  }
-
-  let msg =
-    `⚙️ <b>BB Iteration Quota</b>\n\n` +
-    `<b>ID:</b> <code>${enriched.id}</code>\n` +
-    `<b>Type:</b> <code>${enriched.type}</code>\n` +
-    `<b>Base Limit:</b> <code>${enriched.base_limit}</code>\n` +
-    `<b>Ads Enabled:</b> <code>${enriched.have_ads}</code>\n` +
-    `<b>Extra Points:</b> <code>${enriched.extra_points}</code>\n\n` +
-    `<b>Limit:</b> <code>${enriched.limit}</code>\n` +
-    `<b>Used:</b> <code>${enriched.progress}</code>\n` +
-    `<b>Usage:</b> <code>${enriched.pct}%</code>\n\n` +
-    `${bar}\n\n` +
-    `<b>Started:</b> ${fmt(enriched.started_at)}\n` +
-    `<b>Ends:</b> ${fmt(enriched.ended_at)}`;
-
-  send(user.telegramid, msg);
-  return enriched;
+/* membershipRawCheck returns stored summary object if available (not a blocking synchronous network call) */
+function membershipRawCheck() {
+  const uid = user.telegramid;
+  const uKey = SESSION_USER_PREFIX + uid;
+  const session = User.getProperty(uKey);
+  if (!session) return { ok: false, msg: "No recent session" };
+  // if finalize already created summary -> return it
+  if (session.summary) return { ok: true, summary: session.summary };
+  // still running
+  return { ok: false, msg: "Check in progress", pending: session.pending || 0 };
 }
 
-/* ------------------------------
-   EXPORT API
--------------------------------- */
+/* convenience function to show join UI immediately */
+function showJoinRequest() {
+  const channels = _getChannels();
+  if (!channels || channels.length === 0) return _send(user.telegramid, "⚠️ No channels configured.");
+  _showUI(user.telegramid, channels);
+}
+
+/* small helpers */
+function getNotJoined() {
+  const uid = user.telegramid;
+  const uKey = SESSION_USER_PREFIX + uid;
+  const session = User.getProperty(uKey);
+  if (!session || !session.summary) return [];
+  return session.summary.missing.map(m => m.channel);
+}
+
+/* -----------------------------
+   Expose methods
+   ----------------------------- */
 publish({
-  ping: ping,
-  iteration: iteration,
-  setupOwner: setupOwner,
-  onlyAdmin: onlyAdmin,
-  addAdmin: addAdmin,
-  removeAdmin: removeAdmin,
-  adminList: getAdmins,
-  showAdminList: showAdminList,
-  owner: getOwner
+  membershipSetup: membershipSetup,
+  membershipUpdate: membershipUpdate,
+  membershipRemove: membershipRemove,
+  membershipList: membershipList,
+  membershipCheck: membershipCheck,
+  membershipRawCheck: membershipRawCheck,
+  setJoinMessage: setJoinMessage,
+  getJoinMessage: getJoinMessage,
+  getRequiredChannels: getRequiredChannels,
+  showJoinRequest: showJoinRequest,
+  setDebug: setDebug,
+  getNotJoined: getNotJoined
 });
