@@ -1,363 +1,405 @@
 /*
- * Utility Library — v5
- * Stable version with:
- * - Owner/Admin system
- * - Ping
- * - Iteration
- * - Membership System (public + private)
+ * UtilityLib v5 — Membership + Admin + Tools
+ *
+ * Features:
+ *  - Admin system (owner + admins)
+ *  - ping()
+ *  - iteration()
+ *  - membership checker:
+ *      setJoinCallbacks({ onJoined, onNotJoined, onError, onAllJoined, onSomeMissing })
+ *      checkJoin(channel)         // async -> triggers callbacks; stores result in User prop
+ *      checkJoinAll([channels])   // async -> triggers aggregated callbacks; stores results
+ *      requireJoin(channel)       // uses cached result; if missing -> triggers check and returns false
+ *      requireJoinAll([channels]) // same for multiple
+ *
+ * Notes:
+ *  - Callbacks are developer commands (strings). If not set, no callback is called.
+ *  - Channel can be public username (e.g. "@channel") or chat id (e.g. "-1001234567890").
+ *  - Bot must be admin in the target channel for checks to work properly.
  */
 
-let LIB = "UtilityLib_";
-
-// ======= EXISTING OWNER + ADMIN SYSTEM (DO NOT TOUCH) =======
+const LIB = "UtilityLib_";
 const OWNER_KEY  = LIB + "owner";
 const ADMINS_KEY = LIB + "admins";
+const CB_KEY     = LIB + "callbacks";      // stores callbacks mapping
+const CHECK_CACHE_KEY = LIB + "checkcache_"; // per-user cache prefix
 
-function send(to, text, preview = false, keyboard) {
-  Api.sendMessage({
-    chat_id: to,
-    text: text,
-    parse_mode: "HTML",
-    disable_web_page_preview: !preview,
-    reply_markup: keyboard
-  });
+/* ------------------------------
+   Small helpers
+--------------------------------*/
+function send(to, text, parse = "HTML") {
+  Api.sendMessage({ chat_id: to, text: text, parse_mode: parse });
 }
+function isNumeric(v){ return /^-?\d+$/.test(String(v)); }
+function normalizeChannel(ch){
+  if(!ch && ch !== 0) return null;
+  ch = String(ch).trim();
+  // if looks like -100... or numeric -> use as-is
+  if(isNumeric(ch) && String(ch).startsWith("-100")) return ch;
+  if(isNumeric(ch)) return ch;
+  // ensure starts with @ for username
+  if(ch.startsWith("@")) return ch;
+  return (ch.startsWith("t.me/")? ch : ch); // fallback
+}
+function cacheKeyFor(userId){ return CHECK_CACHE_KEY + String(userId); }
 
-function getOwner() { return Bot.getProperty(OWNER_KEY); }
-function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
-function setAdmins(list) { Bot.setProperty(ADMINS_KEY, list, "json"); }
-function isNumeric(v) { return /^\d+$/.test(String(v)); }
+/* ------------------------------
+   Admin system (per-bot)
+--------------------------------*/
+function getOwner(){ return Bot.getProperty(OWNER_KEY); }
+function getAdmins(){ return Bot.getProperty(ADMINS_KEY) || []; }
+function setAdmins(list){ Bot.setProperty(ADMINS_KEY, list, "json"); }
 
-/* OWNER SETUP */
-function setupOwner() {
-  let owner = getOwner();
-
-  if (owner) {
-    send(user.telegramid, "ℹ️ <b>Owner already set:</b> <code>" + owner + "</code>");
+function setupOwner(){
+  if(getOwner()){
+    send(user.telegramid, "ℹ️ <b>Owner already set:</b> <code>" + getOwner() + "</code>");
     return true;
   }
-
   Bot.setProperty(OWNER_KEY, user.telegramid, "integer");
   Bot.setProperty(ADMINS_KEY, [user.telegramid], "json");
-
-  send(user.telegramid,
-    "🎉 <b>Owner Setup Complete!</b>\nYou are now the <b>Owner</b> & first <b>Admin</b>."
-  );
+  send(user.telegramid, "🎉 <b>Owner setup complete — you are Owner & first Admin.</b>");
   return true;
 }
 
-/* ADMIN CHECK */
-function onlyAdmin() {
-  let owner = getOwner();
-  if (!owner) {
-    send(user.telegramid,
-      "⚠️ <b>Admin System Not Set!</b>\nRun:\n<code>Libs.UtilityLib.setupOwner()</code>"
-    );
+function onlyAdmin(){
+  const owner = getOwner();
+  if(!owner){
+    send(user.telegramid, "⚠️ <b>Admin system not initialized. Run:</b>\n<code>Libs.UtilityLib.setupOwner()</code>");
     return false;
   }
-  let admins = getAdmins();
-  if (!admins.includes(user.telegramid)) {
+  const admins = getAdmins();
+  if(!admins.includes(user.telegramid)){
     send(user.telegramid, "❌ <b>You are not an admin.</b>");
     return false;
   }
   return true;
 }
-
-/* ADD ADMIN */
-function addAdmin(id) {
-  if (!onlyAdmin()) return false;
-  if (!isNumeric(id)) return send(user.telegramid, "⚠️ <b>ID must be numeric.</b>");
-
+function addAdmin(id){
+  if(!onlyAdmin()) return false;
+  if(!isNumeric(id)){ send(user.telegramid, "⚠️ <b>ID must be numeric</b>"); return false; }
   id = Number(id);
-  let admins = getAdmins();
-  if (admins.includes(id)) return send(user.telegramid, "⚠️ <b>User already admin.</b>");
+  let list = getAdmins();
+  if(list.includes(id)){ send(user.telegramid,"⚠️ <b>Already admin</b>"); return false; }
+  list.push(id); setAdmins(list);
+  send(user.telegramid, `✅ <b>Added admin:</b> <code>${id}</code>`);
+  send(id, "🎉 <b>You became an admin for this bot.</b>");
+  return true;
+}
+function removeAdmin(id){
+  if(!onlyAdmin()) return false;
+  if(!isNumeric(id)){ send(user.telegramid, "⚠️ <b>ID must be numeric</b>"); return false; }
+  id = Number(id);
+  const owner = getOwner();
+  if(id === owner){ send(user.telegramid, "❌ <b>Cannot remove Owner</b>"); return false; }
+  let list = getAdmins();
+  if(!list.includes(id)){ send(user.telegramid,"⚠️ <b>Not an admin</b>"); return false; }
+  list = list.filter(x => x !== id); setAdmins(list);
+  send(user.telegramid, `🗑 <b>Removed admin:</b> <code>${id}</code>`);
+  send(id, "⚠️ <b>You were removed from admins of this bot.</b>");
+  return true;
+}
+function showAdminList(){
+  const owner = getOwner();
+  if(!owner){ send(user.telegramid, "⚠️ Admin system not initialized. Run setupOwner()"); return; }
+  const list = getAdmins();
+  if(!list.length){ send(user.telegramid, "⚠️ No admins"); return; }
+  let txt = "👮 <b>Admins</b>\n\n";
+  list.forEach((id, i) => {
+    const role = (id === owner ? " (Owner)" : "");
+    txt += `${i+1}. <code>${id}</code>${role}\n`;
+  });
+  send(user.telegramid, txt);
+}
 
-  admins.push(id);
-  setAdmins(admins);
+/* ------------------------------
+   Callbacks storage
+--------------------------------*/
+function setJoinCallbacks(obj){
+  // expected keys: onJoined, onNotJoined, onError, onAllJoined, onSomeMissing
+  Bot.setProperty(CB_KEY, obj, "json");
+  return true;
+}
+function getJoinCallbacks(){
+  return Bot.getProperty(CB_KEY) || {};
+}
 
-  send(user.telegramid, `✅ <b>Admin Added:</b> <code>${id}</code>`);
-  send(id, "🎉 <b>You are now an Admin!</b>");
+/* ------------------------------
+   CHECK CACHE helpers
+   store per-user per-channel result:
+   User.setProp("UtilityLib_checkcache_<userId>", { channel1: { ok:true, ts:123 }, ... }, "json")
+--------------------------------*/
+function _readUserCache(u){
+  return User.getProp(cacheKeyFor(u)) || {};
+}
+function _writeUserCache(u, obj){
+  User.setProp(cacheKeyFor(u), obj, "json");
+}
+function _storeChannelResult(u, channel, ok){
+  let cache = _readUserCache(u);
+  cache[channel] = { ok: !!ok, ts: Date.now() };
+  _writeUserCache(u, cache);
+}
+function _getCachedChannel(u, channel){
+  let cache = _readUserCache(u);
+  return cache[channel] || null;
+}
+
+/* ------------------------------
+   Core: single channel check (async)
+--------------------------------*/
+function checkJoin(rawChannel){
+  const channel = normalizeChannel(rawChannel);
+  if(!channel){ send(user.telegramid, "⚠️ <b>Invalid channel</b>"); return false; }
+
+  // Prepare on_result/on_error commands (encoded channel in params)
+  const encoded = encodeURIComponent(channel);
+
+  Api.getChatMember({
+    chat_id: channel,
+    user_id: user.telegramid,
+    on_result: LIB + "onCheck " + encoded,
+    on_error:  LIB + "onCheckError " + encoded,
+    bb_options: { caller: "UtilityLib.checkJoin" }
+  });
+
+  // return true (request dispatched)
   return true;
 }
 
-/* REMOVE ADMIN */
-function removeAdmin(id) {
-  if (!onlyAdmin()) return false;
-  if (!isNumeric(id)) return send(user.telegramid, "⚠️ <b>ID must be numeric.</b>");
+/* on_result handler for single channel check */
+function onCheckHandler(){
+  // params contains encoded channel
+  const channel = decodeURIComponent(params.split(" ")[0] || "");
+  // options contains Telegram API response in options
+  // options.result is Telegram's getChatMember result
+  // determine membership
+  try {
+    const res = options.result; // structure from Api.getChatMember
+    const status = res && res.status ? res.status : (res && res.result && res.result.status ? res.result.status : null);
+    const joined = ["member","administrator","creator"].includes(status);
+    _storeChannelResult(user.id, channel, joined);
 
-  id = Number(id);
-  if (id === getOwner()) return send(user.telegramid, "❌ <b>Cannot remove Owner.</b>");
+    const cbs = getJoinCallbacks();
+    if(joined && cbs.onJoined){
+      // run developer's command with channel & result
+      Bot.run({ command: cbs.onJoined, options: { channel: channel, joined: true, result: res } });
+    } else if(!joined && cbs.onNotJoined){
+      Bot.run({ command: cbs.onNotJoined, options: { channel: channel, joined: false, result: res } });
+    }
+  } catch(e){
+    const cbs = getJoinCallbacks();
+    if(cbs.onError){
+      Bot.run({ command: cbs.onError, options: { channel: channel, error: String(e), raw: options } });
+    }
+  }
+}
+on(LIB + "onCheck", onCheckHandler);
 
-  let admins = getAdmins();
-  if (!admins.includes(id)) return send(user.telegramid, "⚠️ <b>Not an admin.</b>");
+/* on_error handler */
+function onCheckErrorHandler(){
+  const channel = decodeURIComponent(params.split(" ")[0] || "");
+  _storeChannelResult(user.id, channel, false);
+  const cbs = getJoinCallbacks();
+  if(cbs.onError){
+    Bot.run({ command: cbs.onError, options: { channel: channel, error: options, params: params } });
+  }
+}
+on(LIB + "onCheckError", onCheckErrorHandler);
 
-  setAdmins(admins.filter(a => a !== id));
-  send(user.telegramid, `🗑 <b>Admin Removed:</b> <code>${id}</code>`);
-  send(id, "⚠️ <b>You are no longer an Admin.</b>");
+/* ------------------------------
+   Multi-channel check (dispatch many) and collect results
+--------------------------------*/
+function checkJoinAll(channels){
+  if(!Array.isArray(channels) || channels.length === 0){
+    send(user.telegramid, "⚠️ <b>Provide channels array</b>");
+    return false;
+  }
+
+  // Prepare aggregator id: unique key per run
+  const runId = "run_" + Date.now() + "_" + Math.floor(Math.random()*9999);
+  // store placeholder in User prop
+  let runState = { total: channels.length, okCount: 0, results: {}, runId: runId, userId: user.id };
+  // store on user prop under LIB+runId
+  User.setProp(LIB + runId, runState, "json");
+
+  channels.forEach(chRaw => {
+    const ch = normalizeChannel(chRaw);
+    const encoded = encodeURIComponent(ch);
+    // call getChatMember with on_result referencing aggregator handler
+    Api.getChatMember({
+      chat_id: ch,
+      user_id: user.telegramid,
+      on_result: LIB + "onCheckAllResult " + runId + " " + encoded,
+      on_error:  LIB + "onCheckAllError " + runId + " " + encoded,
+      bb_options: { caller: "UtilityLib.checkJoinAll" }
+    });
+  });
+
   return true;
 }
 
-/* SHOW ADMINS */
-function showAdminList() {
-  let owner = getOwner();
-  let admins = getAdmins();
-  if (!owner) return send(user.telegramid,"⚠️ Admin system not set.");
-  if (admins.length === 0) return send(user.telegramid, "⚠️ No admins found.");
+/* aggregator result handler (success) */
+function onCheckAllResult(){
+  // params: "<runId> <encodedChannel>"
+  const parts = params.split(" ");
+  const runId = parts[0];
+  const channel = decodeURIComponent(parts.slice(1).join(" "));
+  try {
+    const res = options.result;
+    const status = res && res.status ? res.status : (res && res.result && res.result.status ? res.result.status : null);
+    const joined = ["member","administrator","creator"].includes(status);
+    // read runState
+    let runState = User.getProp(LIB + runId) || null;
+    if(!runState) runState = { total:0, okCount:0, results:{} };
+    runState.results[channel] = { ok: !!joined, result: res };
+    runState.okCount = Object.values(runState.results).filter(r=>r.ok).length;
+    User.setProp(LIB + runId, runState, "json");
 
-  let msg = "👮 <b>Admins List</b>\n\n";
-  let i = 1;
-  admins.forEach(id => {
-    let role = id === owner ? " (<b>Owner</b>)" : " (<i>Admin</i>)";
-    msg += `${i}. <code>${id}</code>${role}\n`;
-    i++;
-  });
-  send(user.telegramid, msg);
-}
+    // store per-channel cache
+    _storeChannelResult(user.id, channel, joined);
 
-// ===============================================================
-// ===================== MEMBERSHIP SYSTEM ========================
-// ===============================================================
-
-const MEMBERSHIP_KEY = LIB + "membership_channels";
-
-/* Show error in BB error tab */
-function throwError(msg) {
-  throw new Error("UtilityLib Membership: " + msg);
-}
-
-/* ========== SETUP FLOW ========== */
-function membershipSetup() {
-
-  // Check callback command exists
-  if (!Bot.getCommand("/onMembershipSetup")) {
-    throwError("Missing /onMembershipSetup command.\nCreate it and call:\nLibs.UtilityLib.onMembershipSetup(message)");
-  }
-
-  send(
-    user.telegramid,
-    "📢 <b>Membership Setup</b>\n\n" +
-    "Send channels (one per line):\n" +
-    "• Public → @ChannelName\n" +
-    "• Private → -1001234567890 | https://t.me/+Invite\n\n" +
-    "Example:\n" +
-    "@CryptoNews\n" +
-    "@AirdropWorld\n" +
-    "-1009876543210 | https://t.me/+ABCDEFghi",
-    false
-  );
-
-  // Run developer callback command
-  Bot.runCommand("/onMembershipSetup");
-}
-
-/* Parse and save */
-function onMembershipSetup(text) {
-  if (!text) return send(user.telegramid, "⚠️ Send channel list.");
-
-  let lines = text.trim().split("\n").map(l => l.trim()).filter(Boolean);
-  if (lines.length === 0) return send(user.telegramid, "⚠️ No channels found.");
-
-  let parsed = [];
-
-  for (let l of lines) {
-    if (l.startsWith("@")) {
-      parsed.push({ type: "public", username: l.replace("@", "") });
-      continue;
+    // if finished -> call callbacks
+    if(Object.keys(runState.results).length >= runState.total){
+      _finalizeRun(runId, runState);
     }
-
-    if (l.includes("|")) {
-      let [id, link] = l.split("|").map(s => s.trim());
-      parsed.push({
-        type: "private",
-        id: id,
-        invite: link
-      });
-      continue;
-    }
-
-    return send(user.telegramid, `⚠️ Invalid line:\n<code>${l}</code>`);
+  } catch(e){
+    // delegate to error handler
+    _finalizeRun(runId, null, e);
   }
+}
+on(LIB + "onCheckAllResult", onCheckAllResult);
 
-  Bot.setProperty(MEMBERSHIP_KEY, parsed, "json");
+/* aggregator error handler */
+function onCheckAllError(){
+  const parts = params.split(" ");
+  const runId = parts[0];
+  const channel = decodeURIComponent(parts.slice(1).join(" "));
+  // mark as not joined and store result
+  let runState = User.getProp(LIB + runId) || { total:0, results:{} };
+  runState.results[channel] = { ok: false, error: options || "error" };
+  User.setProp(LIB + runId, runState, "json");
+  // store cache
+  _storeChannelResult(user.id, channel, false);
 
-  send(
-    user.telegramid,
-    "✅ <b>Membership channels saved!</b>\nUse membershipCheck() in your commands."
-  );
+  if(Object.keys(runState.results).length >= runState.total){
+    _finalizeRun(runId, runState);
+  }
+}
+on(LIB + "onCheckAllError", onCheckAllError);
+
+/* finalize aggregator run - call developer callbacks */
+function _finalizeRun(runId, runState, err){
+  const cbs = getJoinCallbacks();
+  if(err){
+    if(cbs.onError) Bot.run({ command: cbs.onError, options: { runId: runId, error: String(err) } });
+    return;
+  }
+  const allOk = Object.values(runState.results).every(r => r.ok === true);
+  if(allOk){
+    if(cbs.onAllJoined) Bot.run({ command: cbs.onAllJoined, options: { runId: runId, results: runState.results } });
+  } else {
+    if(cbs.onSomeMissing) Bot.run({ command: cbs.onSomeMissing, options: { runId: runId, results: runState.results } });
+  }
+  // remove temporary prop
+  User.setProp(LIB + runId, null);
 }
 
-/* ========== CHECK UI (NO CHECK YET) ========== */
-function membershipCheck() {
-  let list = Bot.getProperty(MEMBERSHIP_KEY);
-  if (!list) return throwError("No channels set. Run membershipSetup().");
-
-  send(user.telegramid, formatJoinMessage(list), false, {
-    inline_keyboard: buildJoinButtons(list)
-  });
-
+/* ------------------------------
+   requireJoin (cached-read)
+   - returns boolean based on cached result
+   - if no cached value -> triggers checkJoin() and returns false
+--------------------------------*/
+function requireJoin(rawChannel){
+  const channel = normalizeChannel(rawChannel);
+  if(!channel) return false;
+  const cache = _getCachedChannel(user.id, channel);
+  if(cache && typeof cache.ok !== "undefined"){
+    return !!cache.ok;
+  }
+  // schedule async check and return false now
+  checkJoin(channel);
   return false;
 }
 
-/* ========== BUTTON PRESS ========== */
-function onMembershipCheck() {
-
-  if (!Bot.getCommand("/onMembershipCheck")) {
-    throwError("Missing /onMembershipCheck command.\nCreate it and call:\nLibs.UtilityLib.onMembershipCheck()");
-  }
-
-  Api.answerCallbackQuery({
-    callback_query_id: request.id,
-    text: "Checking… please wait",
-    show_alert: false
-  });
-
-  Bot.run({
-    command: "UtilityLib_doMembershipCheck",
-    options: { uid: user.telegramid }
-  });
-}
-
-/* ========== HIDDEN CHECK COMMAND ========== */
-function doCheck() {
-  let uid = options.uid;
-
-  let list = Bot.getProperty(MEMBERSHIP_KEY);
-  if (!list) return throwError("No membership channels found.");
-
-  let failures = [];
-
-  let idx = 0;
-  for (let ch of list) {
-    idx++;
-
-    let chatId = ch.type === "public" ? "@" + ch.username : ch.id;
-
-    Api.getChatMember({
-      chat_id: chatId,
-      user_id: uid,
-      on_result: "UtilityLib_updateMembershipUI",
-      on_error: "UtilityLib_updateMembershipUI",
-      bb_options: { ch_index: idx, ch_data: ch }
-    });
-  }
-}
-
-/* ========== UPDATE UI AFTER CHECK ========== */
-function updateUI() {
-  let ch = options.bb_options.ch_data;
-  let joined = false;
-
-  if (options.ok) {
-    let status = options.result.status;
-    if (["member", "administrator", "creator"].includes(status)) {
-      joined = true;
-    }
-  }
-
-  if (!joined) {
-    return showJoinUI();
-  }
-
-  Bot.setProperty(
-    MEMBERSHIP_KEY + "_last_good_" + user.telegramid,
-    true,
-    "boolean"
-  );
-
-  // If all checks passed
-  let pending = Bot.getProperty(
-    MEMBERSHIP_KEY + "_pending_" + user.telegramid
-  ) || 0;
-
-  pending++;
-
-  if (pending >= Bot.getProperty(MEMBERSHIP_KEY).length) {
-    Bot.setProperty(MEMBERSHIP_KEY + "_pending_" + user.telegramid, 0);
-    Api.editMessageText({
-      chat_id: user.telegramid,
-      message_id: request.message_id,
-      text: "🎉 <b>All memberships verified!</b>",
-      parse_mode: "HTML"
-    });
-  } else {
-    Bot.setProperty(
-      MEMBERSHIP_KEY + "_pending_" + user.telegramid,
-      pending,
-      "integer"
-    );
-  }
-}
-
-/* ========================================= */
-/* Helper to build join UI */
-function formatJoinMessage(list) {
-  let msg = "📢 <b>Please join required channels:</b>\n\n";
-
-  let i = 1;
-  for (let ch of list) {
-    if (ch.type === "public") {
-      msg += `${i}. @${ch.username}\n`;
+function requireJoinAll(channels){
+  if(!Array.isArray(channels) || channels.length === 0) return false;
+  let allOk = true, needCheck = [];
+  channels.forEach(cRaw=>{
+    const c = normalizeChannel(cRaw);
+    const cache = _getCachedChannel(user.id, c);
+    if(!(cache && typeof cache.ok !== "undefined")){
+      needCheck.push(c);
+      allOk = false;
     } else {
-      msg += `${i}. <a href="${ch.invite}">Private Channel ${i}</a>\n`;
+      if(!cache.ok) allOk = false;
     }
-    i++;
-  }
-
-  msg += "\nAfter joining, press <b>Check Again</b>.";
-  return msg;
+  });
+  if(needCheck.length) checkJoinAll(needCheck);
+  return allOk;
 }
 
-function buildJoinButtons(list) {
-  let rows = [];
-  let row = [];
-
-  let i = 1;
-  for (let ch of list) {
-    let url = ch.type === "public"
-      ? "https://t.me/" + ch.username
-      : ch.invite;
-
-    row.push({
-      text: "Join " + i,
-      url: url
-    });
-
-    if (row.length === 2) {
-      rows.push(row);
-      row = [];
-    }
-    i++;
-  }
-
-  if (row.length > 0) rows.push(row);
-
-  rows.push([{ text: "🔄 Check Again", callback_data: "membership_check" }]);
-
-  return rows;
+/* ------------------------------
+   iteration() helper (existing)
+--------------------------------*/
+function iteration(){
+  const d = iteration_quota;
+  if(!d) { send(user.telegramid, "<b>❌ Can't load iteration quota</b>"); return null; }
+  const BAR = 25, FULL="█", EMPTY="░";
+  let used = d.progress||0, limit = d.limit||1;
+  let pct = ((used/limit)*100).toFixed(2);
+  let fill = Math.round((pct/100)*BAR);
+  let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR-fill)} ]`;
+  function fmt(t){ try { return new Date(t).toLocaleString() } catch(e){ return t } }
+  let msg =
+    `⚙️ <b>BB Iteration Quota</b>\n\n` +
+    `<b>ID:</b> <code>${d.id}</code>\n` +
+    `<b>Type:</b> <code>${d.quotum_type?.name}</code>\n` +
+    `<b>Base Limit:</b> <code>${d.quotum_type?.base_limit}</code>\n` +
+    `<b>Ads Enabled:</b> <code>${d.have_ads}</code>\n` +
+    `<b>Extra Points:</b> <code>${d.extra_points}</code>\n\n` +
+    `<b>Limit:</b> <code>${limit}</code>\n` +
+    `<b>Used:</b> <code>${used}</code>\n` +
+    `<b>Usage:</b> <code>${pct}%</code>\n\n` +
+    `${bar}\n\n` +
+    `<b>Started:</b> ${fmt(d.started_at)}\n` +
+    `<b>Ends:</b> ${fmt(d.ended_at)}`;
+  send(user.telegramid, msg);
+  // also return raw object for dev inspection
+  return d;
 }
 
-/* ========================================= */
-/* PING & ITERATION — unchanged */
-function ping() { /* unchanged */ }
-function iteration(mode) { /* unchanged */ }
+/* ------------------------------
+   ping() simple tool
+--------------------------------*/
+function ping(){
+  if(options?.result){
+    const latency = Date.now() - options.bb_options.start;
+    Api.editMessageText({ chat_id: options.result.chat.id, message_id: options.result.message_id,
+      text: `🏓 <b>${latency} ms</b>`, parse_mode: "HTML" });
+    return;
+  }
+  Api.sendMessage({ chat_id: user.telegramid, text: "<b>Ping…</b>", parse_mode:"HTML",
+    bb_options: { start: Date.now() }, on_result: LIB + "onPing" });
+}
+on(LIB + "onPing", ping);
 
-/* FINAL EXPORT */
+/* ------------------------------
+   Export API
+--------------------------------*/
 publish({
-  ping: ping,
-  iteration: iteration,
-  setupOwner: setupOwner,
-  onlyAdmin: onlyAdmin,
-  addAdmin: addAdmin,
-  removeAdmin: removeAdmin,
-  adminList: getAdmins,
-  showAdminList: showAdminList,
+  // admin
+  setupOwner: setupOwner, onlyAdmin: onlyAdmin,
+  addAdmin: addAdmin, removeAdmin: removeAdmin, showAdminList: showAdminList,
 
-  // Membership APIs
-  membershipSetup: membershipSetup,
-  onMembershipSetup: onMembershipSetup,
-  membershipCheck: membershipCheck,
-  onMembershipCheck: onMembershipCheck
+  // tools
+  ping: ping, iteration: iteration,
+
+  // callbacks - set/get
+  setJoinCallbacks: setJoinCallbacks, getJoinCallbacks: getJoinCallbacks,
+
+  // membership
+  checkJoin: checkJoin,
+  checkJoinAll: checkJoinAll,
+  requireJoin: requireJoin,
+  requireJoinAll: requireJoinAll
 });
-
-on("UtilityLib_doMembershipCheck", doCheck);
-on("UtilityLib_updateMembershipUI", updateUI);
