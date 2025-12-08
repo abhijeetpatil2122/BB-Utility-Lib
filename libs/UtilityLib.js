@@ -1,5 +1,5 @@
 /*
- * Utility Library — v6 (Stable Production)
+ * Utility Library — v4 (Stable Production)
  * Features:
  *   ping()
  *   iteration(mode)   // formatted, inspect, pick-mode
@@ -8,50 +8,44 @@
  *   addAdmin()
  *   removeAdmin()
  *   showAdminList()
- *   setupMembership()
- *   check()
- *   handle()
- *   isMember()
- *   getChats()
- *   getNotJoinedChats()
+ *
+ * Added: Simplified Membership Checker (MembershipCheckerSimple)
+ *   - mcSetup()
+ *   - mcHandle()
+ *   - mcCheck()
+ *   - mcIsMember(chat_id)
+ *   - mcNotJoined()
+ *   - mcGetChats()
+ *
+ * Internal prefix for membership module: UtilityLib_MC_
  */
 
 let LIB = "UtilityLib_";
 
 const OWNER_KEY  = LIB + "owner";
 const ADMINS_KEY = LIB + "admins";
-const MEMBERSHIP_KEY = LIB + "membership_";
+
+/* ------------------------------
+   Membership Checker internal
+-------------------------------- */
+const MC_PREFIX = "UtilityLib_MC_";
+const MC_PANEL  = "MembershipCheckerSimple";
+const MC_USER_DATA_KEY = MC_PREFIX + "Data";
 
 /* Basic sender */
-function send(to, text, keyboard) {
-  let msg = { chat_id: to, text: text, parse_mode: "HTML" };
-  if (keyboard) {
-    msg.reply_markup = { inline_keyboard: keyboard };
-  }
-  Api.sendMessage(msg);
+function send(to, text) {
+  Api.sendMessage({ chat_id: to, text: text, parse_mode: "HTML" });
 }
 
 /* Helpers */
-function getOwner() { 
-  return Bot.getProperty(OWNER_KEY); 
-}
+function getOwner() { return Bot.getProperty(OWNER_KEY); }
+function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
+function setAdmins(list) { Bot.setProperty(ADMINS_KEY, list, "json"); }
+function isNumeric(v) { return /^\d+$/.test(String(v)); }
 
-function getAdmins() { 
-  return Bot.getProperty(ADMINS_KEY) || []; 
-}
-
-function setAdmins(list) { 
-  Bot.setProperty(ADMINS_KEY, list, "json"); 
-}
-
-function isNumeric(v) { 
-  return /^\d+$/.test(String(v)); 
-}
-
-/* ===============================
-   ADMIN MANAGEMENT SYSTEM
-   =============================== */
-
+/* ------------------------------
+   OWNER SETUP (run once)
+-------------------------------- */
 function setupOwner() {
   let owner = getOwner();
 
@@ -70,6 +64,9 @@ function setupOwner() {
   return true;
 }
 
+/* ------------------------------
+   ADMIN CHECK
+-------------------------------- */
 function onlyAdmin() {
   let owner = getOwner();
 
@@ -90,6 +87,9 @@ function onlyAdmin() {
   return true;
 }
 
+/* ------------------------------
+   ADD ADMIN
+-------------------------------- */
 function addAdmin(id) {
   if (!onlyAdmin()) return false;
 
@@ -110,12 +110,15 @@ function addAdmin(id) {
   admins.push(id);
   setAdmins(admins);
 
-  send(user.telegramid, "✅ <b>Admin Added:</b> <code>" + id + "</code>");
+  send(user.telegramid, `✅ <b>Admin Added:</b> <code>${id}</code>`);
   send(id, "🎉 <b>You are now an Admin!</b>");
 
   return true;
 }
 
+/* ------------------------------
+   REMOVE ADMIN
+-------------------------------- */
 function removeAdmin(id) {
   if (!onlyAdmin()) return false;
 
@@ -139,18 +142,18 @@ function removeAdmin(id) {
     return false;
   }
 
-  admins = admins.filter(function(a) {
-    return a !== id;
-  });
-  
+  admins = admins.filter(a => a !== id);
   setAdmins(admins);
 
-  send(user.telegramid, "🗑 <b>Admin Removed:</b> <code>" + id + "</code>");
+  send(user.telegramid, `🗑 <b>Admin Removed:</b> <code>${id}</code>`);
   send(id, "⚠️ <b>You are no longer an Admin.</b>");
 
   return true;
 }
 
+/* ------------------------------
+   SHOW ADMIN LIST
+-------------------------------- */
 function showAdminList() {
   let owner = getOwner();
 
@@ -162,37 +165,33 @@ function showAdminList() {
   }
 
   let admins = getAdmins();
-  if (admins.length === 0) {
-    send(user.telegramid, "⚠️ <b>No admins found.</b>");
-    return;
-  }
+  if (admins.length === 0) return send(user.telegramid, "⚠️ <b>No admins found.</b>");
 
   let msg = "👮 <b>Admins List</b>\n\n";
   let index = 1;
 
-  admins.forEach(function(id) {
+  admins.forEach(id => {
     let role = id === owner ? " (<b>Owner</b>)" : " (<i>Admin</i>)";
-    msg += index + ". <code>" + id + "</code>" + role + "\n";
+    msg += `${index}. <code>${id}</code>${role}\n`;
     index++;
   });
 
-  msg += "\n<b>Total:</b> " + admins.length + " | <b>Owner:</b> 1 | <b>Admins:</b> " + (admins.length - 1);
+  msg += `\n<b>Total:</b> ${admins.length} | <b>Owner:</b> 1 | <b>Admins:</b> ${admins.length - 1}`;
 
   send(user.telegramid, msg);
 }
 
-/* ===============================
-   UTILITY FUNCTIONS
-   =============================== */
-
+/* ------------------------------
+   PING
+-------------------------------- */
 function ping() {
-  if (options && options.result) {
+  if (options?.result) {
     let latency = Date.now() - options.bb_options.start;
 
     Api.editMessageText({
       chat_id: options.result.chat.id,
       message_id: options.result.message_id,
-      text: "🏓 <b>" + latency + " ms</b>",
+      text: `🏓 <b>${latency} ms</b>`,
       parse_mode: "HTML"
     });
     return;
@@ -207,40 +206,36 @@ function ping() {
   });
 }
 
+on(LIB + "onPing", ping);
+
+/* ------------------------------
+   ITERATION (3 modes)
+-------------------------------- */
 function iteration(mode) {
   const d = iteration_quota;
   if (!d) return null;
 
   const enriched = {
-    id: d.id,
-    progress: d.progress,
-    limit: d.limit,
-    have_ads: d.have_ads,
-    extra_points: d.extra_points,
-    started_at: d.started_at,
-    ended_at: d.ended_at,
+    ...d,
     pct: ((d.progress / d.limit) * 100).toFixed(2),
-    type: (d.quotum_type && d.quotum_type.name) || "Unknown",
-    base_limit: (d.quotum_type && d.quotum_type.base_limit) || 0
+    type: d.quotum_type?.name || "Unknown",
+    base_limit: d.quotum_type?.base_limit
   };
 
+  /* PICK MODE (multiple comma-separated keys) */
   if (mode && mode.includes(",")) {
-    let keys = mode.split(",").map(function(k) {
-      return k.trim();
-    });
-    
+    let keys = mode.split(",").map(k => k.trim());
     let obj = {};
-    keys.forEach(function(k) {
-      obj[k] = enriched[k];
-    });
-    
+    keys.forEach(k => { obj[k] = enriched[k]; });
     return obj;
   }
 
+  /* SINGLE VALUE MODE */
   if (mode && mode !== "inspect") {
     return enriched[mode];
   }
 
+  /* RAW INSPECT MODE */
   if (mode === "inspect") {
     send(
       user.telegramid,
@@ -249,332 +244,385 @@ function iteration(mode) {
     return d;
   }
 
-  const BAR = 25;
-  const FULL = "█";
-  const EMPTY = "░";
+  /* FORMATTED MESSAGE */
+  const BAR = 25, FULL = "█", EMPTY = "░";
   let fill = Math.round((enriched.pct / 100) * BAR);
-  let bar = "[ " + FULL.repeat(fill) + EMPTY.repeat(BAR - fill) + " ]";
+  let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
 
   function fmt(t) {
-    try { 
-      return new Date(t).toLocaleString(); 
-    } catch (e) { 
-      return t; 
-    }
+    try { return new Date(t).toLocaleString(); }
+    catch { return t; }
   }
 
   let msg =
-    "⚙️ <b>BB Iteration Quota</b>\n\n" +
-    "<b>ID:</b> <code>" + enriched.id + "</code>\n" +
-    "<b>Type:</b> <code>" + enriched.type + "</code>\n" +
-    "<b>Base Limit:</b> <code>" + enriched.base_limit + "</code>\n" +
-    "<b>Ads Enabled:</b> <code>" + enriched.have_ads + "</code>\n" +
-    "<b>Extra Points:</b> <code>" + enriched.extra_points + "</code>\n\n" +
-    "<b>Limit:</b> <code>" + enriched.limit + "</code>\n" +
-    "<b>Used:</b> <code>" + enriched.progress + "</code>\n" +
-    "<b>Usage:</b> <code>" + enriched.pct + "%</code>\n\n" +
-    bar + "\n\n" +
-    "<b>Started:</b> " + fmt(enriched.started_at) + "\n" +
-    "<b>Ends:</b> " + fmt(enriched.ended_at);
+    `⚙️ <b>BB Iteration Quota</b>\n\n` +
+    `<b>ID:</b> <code>${enriched.id}</code>\n` +
+    `<b>Type:</b> <code>${enriched.type}</code>\n` +
+    `<b>Base Limit:</b> <code>${enriched.base_limit}</code>\n` +
+    `<b>Ads Enabled:</b> <code>${enriched.have_ads}</code>\n` +
+    `<b>Extra Points:</b> <code>${enriched.extra_points}</code>\n\n` +
+    `<b>Limit:</b> <code>${enriched.limit}</code>\n` +
+    `<b>Used:</b> <code>${enriched.progress}</code>\n` +
+    `<b>Usage:</b> <code>${enriched.pct}%</code>\n\n` +
+    `${bar}\n\n` +
+    `<b>Started:</b> ${fmt(enriched.started_at)}\n` +
+    `<b>Ends:</b> ${fmt(enriched.ended_at)}`;
 
   send(user.telegramid, msg);
   return enriched;
 }
 
-/* ===============================
-   MEMBERSHIP CHECKER (Simple MCL Style)
-   =============================== */
+/* ------------------------------
+   Membership Checker - Simple
+-------------------------------- */
 
-function _setupMembershipPanel() {
+/* Admin Panel setup */
+function mcSetup() {
   const panel = {
-    title: "Membership Checker Settings",
-    description: "Configure channels/groups that users must join",
-    icon: "people",
+    title: "Membership checker (simple)",
+    description: "Configure chats and callbacks for membership checking (simple version).",
+    icon: "person-add",
     fields: [
       {
         name: "chats",
-        title: "Required Channels/Groups",
-        description: "Chat usernames or IDs (comma separated)",
+        title: "Chats or channels for checking",
+        description: "must be separated by commas (e.g. @channel1, @chat2)",
         type: "string",
-        placeholder: "@channel1, @group2, -1001234567890",
+        placeholder: "@myChannel, @myChat",
         icon: "chatbubbles"
       },
       {
         name: "checkTime",
-        title: "Checking Delay (minutes)",
-        description: "Auto-check will run only after this delay",
+        title: "checking delay in minutes",
+        description: "the bot will check the user membership for incoming messages once per this interval",
         type: "integer",
         placeholder: "10",
         value: 20,
         icon: "time"
       },
       {
-        name: "onNeedJoining",
-        title: "On Need Joining Command",
-        description: "Called when user needs to join ANY channel",
+        name: "onNeedJoin",
+        title: "onNeedJoin command",
+        description: "if the user does not have membership to ANY chat, this command will be executed",
         type: "string",
-        placeholder: "/onNeedJoining",
+        placeholder: "/onNeedJoin",
         icon: "warning"
       },
       {
-        name: "onJoining",
-        title: "On Joined Command",
-        description: "Called when user joins ANY channel",
+        name: "onJoined",
+        title: "onJoined command",
+        description: "if the user just received membership for ANY chat this command will be executed",
         type: "string",
         placeholder: "/onJoined",
-        icon: "checkmark"
+        icon: "person-add"
+      },
+      {
+        name: "onAllJoined",
+        title: "onAllJoined command",
+        description: "if the user just received membership for ALL chats this command will be executed",
+        type: "string",
+        placeholder: "/onAllJoined",
+        icon: "happy"
       },
       {
         name: "debug",
-        title: "Debug Mode",
-        description: "Show debug information",
+        title: "debug info",
+        description: "turn on for debug info",
         type: "checkbox",
         value: false,
-        icon: "bug"
+        icon: "hammer"
       }
     ]
   };
 
   AdminPanel.setPanel({
-    panel_name: "MembershipChecker",
+    panel_name: MC_PANEL,
     data: panel
   });
+
+  Bot.sendMessage("Membership checker (simple): Admin panel created.");
 }
 
-function setupMembership() {
-  if (!onlyAdmin()) return false;
-  
-  _setupMembershipPanel();
-  Bot.sendMessage("✅ Membership Checker panel setup complete!");
-  return true;
+/* Get lib options from admin panel */
+function _mcGetLibOptions() {
+  return AdminPanel.getPanelValues(MC_PANEL) || {};
 }
 
-function _getMembershipOptions() {
-  return AdminPanel.getPanelValues("MembershipChecker") || {};
-}
-
-function _debugInfo(info) {
-  let opts = _getMembershipOptions();
+/* Debug helper */
+function _mcDebug(info) {
+  const opts = _mcGetLibOptions();
   if (!opts.debug) return;
-  
-  Api.sendMessage({
-    chat_id: user.telegramid,
-    text: "<b>Membership Debug</b>\n" + info,
-    parse_mode: "HTML"
-  });
+  try {
+    Api.sendMessage({
+      text: "<b>MC Debug</b>\n\n" + String(info),
+      parse_mode: "HTML"
+    });
+  } catch (e) { /* ignore debug failures */ }
 }
 
-function _getChatsArr() {
-  let opts = _getMembershipOptions();
-  if (!opts.chats) return [];
-  
-  let chats = opts.chats.split(",");
-  let result = [];
-  
-  for (let i = 0; i < chats.length; i++) {
-    let chat = chats[i].trim();
-    if (chat.length > 0) {
-      result.push(chat);
-    }
+/* User data helpers */
+function _mcGetUserData() {
+  if (!user) {
+    throw new Error("MembershipChecker: user is not exist. Use mcCheck only in user context.");
   }
-  
-  return result;
-}
-
-function _getUserData() {
-  if (!user) return { chats: {} };
-  
-  let userData = User.getProperty(MEMBERSHIP_KEY + "data");
-  if (!userData) userData = { chats: {} };
+  let userData = User.getProperty(MC_USER_DATA_KEY);
+  if (!userData) userData = { lastCheck: 0, chats: {} };
   if (!userData.chats) userData.chats = {};
-  
   return userData;
 }
 
-function _saveUserData(userData) {
-  User.setProperty(MEMBERSHIP_KEY + "data", userData, "json");
+function _mcSaveUserData(userData) {
+  _mcDebug("_mcSaveUserData: " + JSON.stringify(userData));
+  User.setProperty(MC_USER_DATA_KEY, userData, "json");
 }
 
-function _isJoined(response) {
-  if (!response || !response.result) return false;
-  let status = response.result.status;
-  return ["member", "administrator", "creator", "restricted"].includes(status);
+/* split chats string into array */
+function _mcGetChatsArr() {
+  const opts = _mcGetLibOptions();
+  if (!opts.chats) return [];
+  let chats = opts.chats.split(",").map(c => c.trim()).filter(Boolean);
+  return chats;
 }
 
-function _checkSingleChat(chatId, callback) {
+/* can run handle again? */
+function _mcCanRunHandleAgain(curTime) {
+  if (!curTime) return false;
+  const opts = _mcGetLibOptions();
+  if (!opts.checkTime) {
+    throw new Error("MembershipChecker: please setup checking delay in Admin Panel");
+  }
+  let duration = Date.now() - curTime; // ms
+  duration = duration / 1000 / 60; // minutes
+  return duration > parseInt(opts.checkTime);
+}
+
+/* spam guard: only 1 check per 2 seconds per user */
+function _mcIsSpamCall(lastCheck) {
+  if (!lastCheck) return false;
+  return (Date.now() - lastCheck) < 2000;
+}
+
+/* Public: manual check - runs immediate checks for all chats
+   options can be any object to forward to callbacks
+*/
+function mcCheck(passed_options) {
+  const userData = _mcGetUserData();
+
+  _mcDebug("mcCheck for userData: " + JSON.stringify(userData));
+
+  if (_mcIsSpamCall(userData.lastCheck)) {
+    _mcDebug("mcCheck spam - skipped");
+    return;
+  }
+
+  userData.lastCheck = Date.now();
+  _mcSaveUserData(userData);
+
+  const chats = _mcGetChatsArr();
+  if (!chats.length) {
+    throw new Error("MembershipChecker: no chats configured in Admin Panel");
+  }
+
+  // create background tasks for each chat
+  for (let i = 0; i < chats.length; i++) {
+    const chat = chats[i];
+    Bot.run({
+      command: MC_PREFIX + "checkMembership " + chat,
+      options: {
+        time: userData.lastCheck,
+        bb_options: passed_options
+      },
+      run_after: 1
+    });
+  }
+}
+
+/* Public: handle for before-all (@) command - runs only if delay passed */
+function mcHandle(passed_options) {
+  if (!user) return; // only for private user context
+
+  const opts = _mcGetLibOptions();
+  if (!opts.chats) {
+    _mcDebug("mcHandle: no chats set - skip");
+    return;
+  }
+
+  // prevent reacting to internal commands (simple)
+  if (message && message.indexOf(MC_PREFIX) === 0) {
+    _mcDebug("mcHandle: internal command - skip");
+    return;
+  }
+
+  const userData = _mcGetUserData();
+  if (_mcCanRunHandleAgain(userData.lastCheck)) {
+    _mcDebug("mcHandle: delay passed -> mcCheck will be executed");
+    return mcCheck(passed_options);
+  }
+
+  _mcDebug("mcHandle: checking not required (delay not passed)");
+}
+
+/* Check membership for a single chat (this command executed in background) */
+function checkMembership() {
+  // params contains chat id (with possible @) as first token
+  let chat_id = params.split(" ")[0];
+
   Api.getChatMember({
-    chat_id: chatId,
+    chat_id: chat_id,
     user_id: user.telegramid,
-    on_result: MEMBERSHIP_KEY + "checkResult " + chatId + " " + callback,
-    on_error: MEMBERSHIP_KEY + "checkError " + chatId
+    on_result: MC_PREFIX + "onCheckMembership " + chat_id,
+    on_error: MC_PREFIX + "onError " + chat_id,
+    bb_options: options // pass options for callbacks
   });
 }
 
-function _runCallback(callbackName, chatId, result) {
-  let opts = _getMembershipOptions();
-  let command = opts[callbackName];
-  
-  if (!command) {
-    _debugInfo("Callback not set: " + callbackName);
+/* Determine membership from Api response object */
+function _mcIsMemberFromApiResponse(resp) {
+  // resp.result.status may be 'member', 'administrator', 'creator', 'left', 'kicked', etc.
+  try {
+    const status = resp.result.status;
+    return ["member", "administrator", "creator"].includes(status);
+  } catch (e) {
     return false;
   }
-  
-  Bot.run({
-    command: command,
-    options: {
-      chat_id: chatId,
-      result: result,
-      is_member: _isJoined({result: result})
-    }
-  });
-  
-  return true;
 }
 
-function check(passedOptions) {
-  let userData = _getUserData();
-  let chats = _getChatsArr();
-  
-  if (chats.length === 0) {
-    Bot.sendMessage("⚠️ No channels configured for membership check");
+/* Called when Api.getChatMember succeeded (background) */
+function onCheckMembership() {
+  let chat_id = params.split(" ")[0];
+
+  let userData = _mcGetUserData();
+  // ensure lastCheck from calling options.time if provided
+  if (options && options.time) {
+    userData.lastCheck = options.time;
+  }
+
+  _mcDebug("onCheckMembership: chat=" + chat_id + " options=" + JSON.stringify(options) + " userData=" + JSON.stringify(userData));
+
+  const isNowMember = _mcIsMemberFromApiResponse(options);
+
+  const prevState = !!userData.chats[chat_id];
+  userData.chats[chat_id] = isNowMember;
+  _mcSaveUserData(userData);
+
+  const opts = _mcGetLibOptions();
+
+  // If not member -> run onNeedJoin
+  if (!isNowMember) {
+    if (opts.onNeedJoin) {
+      _mcDebug("Running onNeedJoin for " + chat_id);
+      Bot.run({
+        command: opts.onNeedJoin,
+        options: {
+          chat_id: chat_id,
+          result: options.result,
+          bb_options: options.bb_options
+        }
+      });
+    }
     return;
   }
-  
-  // Anti-spam: 2 seconds cooldown
-  if (userData.lastCheck && (Date.now() - userData.lastCheck) < 2000) {
-    return;
-  }
-  
-  userData.lastCheck = Date.now();
-  _saveUserData(userData);
-  
-  _debugInfo("Starting membership check for " + chats.length + " chats");
-  
-  // Check all chats
-  for (let i = 0; i < chats.length; i++) {
-    _checkSingleChat(chats[i], passedOptions || "check");
-  }
-}
 
-function handle(passedOptions) {
-  if (!user) return;
-  
-  let opts = _getMembershipOptions();
-  if (!opts.chats) return;
-  
-  // Skip internal commands
-  let skipCommands = ["/start", "/check", "/setup"];
-  for (let i = 0; i < skipCommands.length; i++) {
-    if (message && message.startsWith(skipCommands[i])) {
-      return;
-    }
-  }
-  
-  let userData = _getUserData();
-  let checkTime = opts.checkTime || 20;
-  
-  // Check if enough time has passed
-  if (userData.lastHandleCheck) {
-    let minutesPassed = (Date.now() - userData.lastHandleCheck) / 60000;
-    if (minutesPassed < checkTime) {
-      return;
-    }
-  }
-  
-  userData.lastHandleCheck = Date.now();
-  _saveUserData(userData);
-  
-  check(passedOptions);
-}
-
-function isMember(chatId) {
-  if (chatId) {
-    // Check single chat
-    try {
-      let result = Api.getChatMemberSync({
-        chat_id: chatId,
-        user_id: user.telegramid
+  // is member now
+  // if previously not a member -> just joined
+  if (!prevState && isNowMember) {
+    if (opts.onJoined) {
+      _mcDebug("Running onJoined for " + chat_id);
+      Bot.run({
+        command: opts.onJoined,
+        options: {
+          chat_id: chat_id,
+          result: options.result,
+          bb_options: options.bb_options
+        }
       });
-      return _isJoined({result: result});
-    } catch (e) {
-      return false;
     }
   }
-  
-  // Check all chats
-  let chats = _getChatsArr();
-  let notJoined = [];
-  
-  for (let i = 0; i < chats.length; i++) {
-    try {
-      let result = Api.getChatMemberSync({
-        chat_id: chats[i],
-        user_id: user.telegramid
+
+  // check if user joined ALL chats now
+  const allChats = _mcGetChatsArr();
+  const stillNotJoined = allChats.filter(c => !userData.chats[c]);
+  if (stillNotJoined.length === 0) {
+    // user is member of all chats
+    if (opts.onAllJoined) {
+      _mcDebug("Running onAllJoined (user joined all chats)");
+      Bot.run({
+        command: opts.onAllJoined,
+        options: {
+          result: options.result,
+          bb_options: options.bb_options
+        }
       });
-      if (!_isJoined({result: result})) {
-        notJoined.push(chats[i]);
-      }
-    } catch (e) {
-      notJoined.push(chats[i]);
     }
   }
-  
-  return notJoined.length === 0;
 }
 
-function getChats() {
-  return _getMembershipOptions().chats || "";
+/* Called on Api error */
+function onMCError() {
+  _mcDebug("onMCError: for chat=" + params + " options=" + JSON.stringify(options));
+  const opts = _mcGetLibOptions();
+  // no dedicated onError callback in minimal version - we won't run any command
+  // But if someone put an "onNeedJoin" as error handler, we avoid executing it unexpectedly.
 }
 
-function getNotJoinedChats() {
-  let chats = _getChatsArr();
-  let notJoined = [];
-  
-  for (let i = 0; i < chats.length; i++) {
-    if (!isMember(chats[i])) {
-      notJoined.push(chats[i]);
-    }
+/* Public helper: isMember (single chat or all) */
+function mcIsMember(chat_id) {
+  const opts = _mcGetLibOptions();
+  const userData = _mcGetUserData();
+
+  if (chat_id) {
+    return !!userData.chats[chat_id];
   }
-  
+
+  // all chats
+  const chats = _mcGetChatsArr();
+  if (!chats.length) {
+    throw new Error("MembershipChecker: no chats configured in Admin Panel");
+  }
+
+  return chats.every(c => !!userData.chats[c]);
+}
+
+/* Public: get not joined chats */
+function mcNotJoined() {
+  const chats = _mcGetChatsArr();
+  const userData = _mcGetUserData();
+  const notJoined = chats.filter(c => !userData.chats[c]);
   return notJoined.join(", ");
 }
 
-/* Event Handlers */
-on(MEMBERSHIP_KEY + "checkResult", function() {
-  let parts = params.split(" ");
-  let chatId = parts[0];
-  let callbackType = parts[1] || "check";
-  
-  let userData = _getUserData();
-  let isMemberNow = _isJoined(options);
-  
-  // Store current status
-  userData.chats[chatId] = {
-    joined: isMemberNow,
-    lastCheck: Date.now()
-  };
-  _saveUserData(userData);
-  
-  if (isMemberNow) {
-    _runCallback("onJoining", chatId, options.result);
-  } else {
-    _runCallback("onNeedJoining", chatId, options.result);
+/* Public: get chats (raw string from admin panel) */
+function mcGetChats() {
+  const opts = _mcGetLibOptions();
+  return opts.chats || "";
+}
+
+/* Register membership background handlers */
+on(MC_PREFIX + "checkMemberships", function() {
+  // iterate chats and run small tasks
+  const chats = _mcGetChatsArr();
+  _mcDebug("checkMemberships: will iterate " + JSON.stringify(chats));
+  for (let i = 0; i < chats.length; i++) {
+    const chat = chats[i];
+    Bot.run({
+      command: MC_PREFIX + "checkMembership " + chat,
+      options: options,
+      run_after: 1
+    });
   }
 });
 
-on(MEMBERSHIP_KEY + "checkError", function() {
-  _debugInfo("Error checking chat: " + params + " - " + JSON.stringify(options));
-});
+on(MC_PREFIX + "checkMembership", checkMembership);
+on(MC_PREFIX + "onCheckMembership", onCheckMembership);
+on(MC_PREFIX + "onError", onMCError);
 
-/* ===============================
-   EXPORT API
-   =============================== */
+/* ------------------------------
+   EXPORT API (merge with existing)
+-------------------------------- */
+/* Note: keep existing exported methods and append membership API */
 publish({
-  // Core utilities
   ping: ping,
   iteration: iteration,
-  
-  // Admin management
   setupOwner: setupOwner,
   onlyAdmin: onlyAdmin,
   addAdmin: addAdmin,
@@ -582,14 +630,12 @@ publish({
   adminList: getAdmins,
   showAdminList: showAdminList,
   owner: getOwner,
-  
-  // Membership checker (MCL style)
-  setupMembership: setupMembership,
-  check: check,
-  handle: handle,
-  isMember: isMember,
-  getChats: getChats,
-  getNotJoinedChats: getNotJoinedChats
-});
 
-on(LIB + "onPing", ping);
+  /* membership API */
+  mcSetup: mcSetup,
+  mcHandle: mcHandle,
+  mcCheck: mcCheck,
+  mcIsMember: mcIsMember,
+  mcNotJoined: mcNotJoined,
+  mcGetChats: mcGetChats
+});
