@@ -1,5 +1,5 @@
 /*
- * Utility Library — v5 (Stable Production)
+ * Utility Library — v6 (Stable Production)
  * Features:
  *   ping()
  *   iteration(mode)   // formatted, inspect, pick-mode
@@ -9,17 +9,18 @@
  *   removeAdmin()
  *   showAdminList()
  *   setupMembership()
- *   checkMembership()
- *   showMembershipStatus()
- *   protectCommand()
- *   handleMembership()
+ *   check()
+ *   handle()
+ *   isMember()
+ *   getChats()
+ *   getNotJoinedChats()
  */
 
 let LIB = "UtilityLib_";
 
 const OWNER_KEY  = LIB + "owner";
 const ADMINS_KEY = LIB + "admins";
-const MEMBERSHIP_KEY = LIB + "membership";
+const MEMBERSHIP_KEY = LIB + "membership_";
 
 /* Basic sender */
 function send(to, text, keyboard) {
@@ -47,9 +48,10 @@ function isNumeric(v) {
   return /^\d+$/.test(String(v)); 
 }
 
-/* ------------------------------
-   OWNER SETUP (run once)
--------------------------------- */
+/* ===============================
+   ADMIN MANAGEMENT SYSTEM
+   =============================== */
+
 function setupOwner() {
   let owner = getOwner();
 
@@ -68,9 +70,6 @@ function setupOwner() {
   return true;
 }
 
-/* ------------------------------
-   ADMIN CHECK
--------------------------------- */
 function onlyAdmin() {
   let owner = getOwner();
 
@@ -91,9 +90,6 @@ function onlyAdmin() {
   return true;
 }
 
-/* ------------------------------
-   ADD ADMIN
--------------------------------- */
 function addAdmin(id) {
   if (!onlyAdmin()) return false;
 
@@ -114,15 +110,12 @@ function addAdmin(id) {
   admins.push(id);
   setAdmins(admins);
 
-  send(user.telegramid, `✅ <b>Admin Added:</b> <code>${id}</code>`);
+  send(user.telegramid, "✅ <b>Admin Added:</b> <code>" + id + "</code>");
   send(id, "🎉 <b>You are now an Admin!</b>");
 
   return true;
 }
 
-/* ------------------------------
-   REMOVE ADMIN
--------------------------------- */
 function removeAdmin(id) {
   if (!onlyAdmin()) return false;
 
@@ -152,15 +145,12 @@ function removeAdmin(id) {
   
   setAdmins(admins);
 
-  send(user.telegramid, `🗑 <b>Admin Removed:</b> <code>${id}</code>`);
+  send(user.telegramid, "🗑 <b>Admin Removed:</b> <code>" + id + "</code>");
   send(id, "⚠️ <b>You are no longer an Admin.</b>");
 
   return true;
 }
 
-/* ------------------------------
-   SHOW ADMIN LIST
--------------------------------- */
 function showAdminList() {
   let owner = getOwner();
 
@@ -182,18 +172,19 @@ function showAdminList() {
 
   admins.forEach(function(id) {
     let role = id === owner ? " (<b>Owner</b>)" : " (<i>Admin</i>)";
-    msg += `${index}. <code>${id}</code>${role}\n`;
+    msg += index + ". <code>" + id + "</code>" + role + "\n";
     index++;
   });
 
-  msg += `\n<b>Total:</b> ${admins.length} | <b>Owner:</b> 1 | <b>Admins:</b> ${admins.length - 1}`;
+  msg += "\n<b>Total:</b> " + admins.length + " | <b>Owner:</b> 1 | <b>Admins:</b> " + (admins.length - 1);
 
   send(user.telegramid, msg);
 }
 
-/* ------------------------------
-   PING
--------------------------------- */
+/* ===============================
+   UTILITY FUNCTIONS
+   =============================== */
+
 function ping() {
   if (options && options.result) {
     let latency = Date.now() - options.bb_options.start;
@@ -201,7 +192,7 @@ function ping() {
     Api.editMessageText({
       chat_id: options.result.chat.id,
       message_id: options.result.message_id,
-      text: `🏓 <b>${latency} ms</b>`,
+      text: "🏓 <b>" + latency + " ms</b>",
       parse_mode: "HTML"
     });
     return;
@@ -216,9 +207,6 @@ function ping() {
   });
 }
 
-/* ------------------------------
-   ITERATION (3 modes)
--------------------------------- */
 function iteration(mode) {
   const d = iteration_quota;
   if (!d) return null;
@@ -236,7 +224,6 @@ function iteration(mode) {
     base_limit: (d.quotum_type && d.quotum_type.base_limit) || 0
   };
 
-  /* PICK MODE (multiple comma-separated keys) */
   if (mode && mode.includes(",")) {
     let keys = mode.split(",").map(function(k) {
       return k.trim();
@@ -250,12 +237,10 @@ function iteration(mode) {
     return obj;
   }
 
-  /* SINGLE VALUE MODE */
   if (mode && mode !== "inspect") {
     return enriched[mode];
   }
 
-  /* RAW INSPECT MODE */
   if (mode === "inspect") {
     send(
       user.telegramid,
@@ -264,12 +249,11 @@ function iteration(mode) {
     return d;
   }
 
-  /* FORMATTED MESSAGE */
   const BAR = 25;
   const FULL = "█";
   const EMPTY = "░";
   let fill = Math.round((enriched.pct / 100) * BAR);
-  let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
+  let bar = "[ " + FULL.repeat(fill) + EMPTY.repeat(BAR - fill) + " ]";
 
   function fmt(t) {
     try { 
@@ -280,114 +264,111 @@ function iteration(mode) {
   }
 
   let msg =
-    `⚙️ <b>BB Iteration Quota</b>\n\n` +
-    `<b>ID:</b> <code>${enriched.id}</code>\n` +
-    `<b>Type:</b> <code>${enriched.type}</code>\n` +
-    `<b>Base Limit:</b> <code>${enriched.base_limit}</code>\n` +
-    `<b>Ads Enabled:</b> <code>${enriched.have_ads}</code>\n` +
-    `<b>Extra Points:</b> <code>${enriched.extra_points}</code>\n\n` +
-    `<b>Limit:</b> <code>${enriched.limit}</code>\n` +
-    `<b>Used:</b> <code>${enriched.progress}</code>\n` +
-    `<b>Usage:</b> <code>${enriched.pct}%</code>\n\n` +
-    `${bar}\n\n` +
-    `<b>Started:</b> ${fmt(enriched.started_at)}\n` +
-    `<b>Ends:</b> ${fmt(enriched.ended_at)}`;
+    "⚙️ <b>BB Iteration Quota</b>\n\n" +
+    "<b>ID:</b> <code>" + enriched.id + "</code>\n" +
+    "<b>Type:</b> <code>" + enriched.type + "</code>\n" +
+    "<b>Base Limit:</b> <code>" + enriched.base_limit + "</code>\n" +
+    "<b>Ads Enabled:</b> <code>" + enriched.have_ads + "</code>\n" +
+    "<b>Extra Points:</b> <code>" + enriched.extra_points + "</code>\n\n" +
+    "<b>Limit:</b> <code>" + enriched.limit + "</code>\n" +
+    "<b>Used:</b> <code>" + enriched.progress + "</code>\n" +
+    "<b>Usage:</b> <code>" + enriched.pct + "%</code>\n\n" +
+    bar + "\n\n" +
+    "<b>Started:</b> " + fmt(enriched.started_at) + "\n" +
+    "<b>Ends:</b> " + fmt(enriched.ended_at);
 
   send(user.telegramid, msg);
   return enriched;
 }
 
 /* ===============================
-   MEMBERSHIP CHECKING SYSTEM
+   MEMBERSHIP CHECKER (Simple MCL Style)
    =============================== */
 
-/* Setup membership panel */
+function _setupMembershipPanel() {
+  const panel = {
+    title: "Membership Checker Settings",
+    description: "Configure channels/groups that users must join",
+    icon: "people",
+    fields: [
+      {
+        name: "chats",
+        title: "Required Channels/Groups",
+        description: "Chat usernames or IDs (comma separated)",
+        type: "string",
+        placeholder: "@channel1, @group2, -1001234567890",
+        icon: "chatbubbles"
+      },
+      {
+        name: "checkTime",
+        title: "Checking Delay (minutes)",
+        description: "Auto-check will run only after this delay",
+        type: "integer",
+        placeholder: "10",
+        value: 20,
+        icon: "time"
+      },
+      {
+        name: "onNeedJoining",
+        title: "On Need Joining Command",
+        description: "Called when user needs to join ANY channel",
+        type: "string",
+        placeholder: "/onNeedJoining",
+        icon: "warning"
+      },
+      {
+        name: "onJoining",
+        title: "On Joined Command",
+        description: "Called when user joins ANY channel",
+        type: "string",
+        placeholder: "/onJoined",
+        icon: "checkmark"
+      },
+      {
+        name: "debug",
+        title: "Debug Mode",
+        description: "Show debug information",
+        type: "checkbox",
+        value: false,
+        icon: "bug"
+      }
+    ]
+  };
+
+  AdminPanel.setPanel({
+    panel_name: "MembershipChecker",
+    data: panel
+  });
+}
+
 function setupMembership() {
   if (!onlyAdmin()) return false;
   
-  AdminPanel.setPanel({
-    panel_name: "MembershipSettings",
-    data: {
-      title: "📋 Membership Requirements",
-      description: "Configure channels/groups users must join",
-      icon: "people",
-      
-      fields: [
-        {
-          name: "requiredChats",
-          title: "Required Channels/Groups",
-          description: "Chat usernames or IDs (comma separated)\nExample: @channel1, @group2, -1001234567890",
-          type: "string",
-          placeholder: "@paradoxMovies, @paradoxSupport",
-          icon: "chatbubbles"
-        },
-        {
-          name: "checkMode",
-          title: "Membership Mode",
-          description: "How to check user membership",
-          type: "select",
-          options: [
-            { value: "any", label: "Join ANY one" },
-            { value: "all", label: "Join ALL" }
-          ],
-          value: "all",
-          icon: "settings"
-        },
-        {
-          name: "successMessage",
-          title: "Success Message",
-          description: "Message when user has required membership",
-          type: "text",
-          placeholder: "✅ You have access to all required channels!",
-          value: "✅ You have access to all required channels!",
-          icon: "checkmark-circle"
-        },
-        {
-          name: "requiredMessage",
-          title: "Required Message",
-          description: "Message when user needs to join",
-          type: "text",
-          placeholder: "❌ Please join required channels to continue",
-          value: "❌ Please join required channels to continue",
-          icon: "warning"
-        },
-        {
-          name: "showJoinButtons",
-          title: "Show Join Buttons",
-          description: "Show inline buttons to join missing channels",
-          type: "checkbox",
-          value: true,
-          icon: "link"
-        },
-        {
-          name: "autoCheck",
-          title: "Auto Check",
-          description: "Automatically check on user messages",
-          type: "checkbox",
-          value: true,
-          icon: "refresh"
-        }
-      ]
-    }
-  });
-  
-  send(user.telegramid, "✅ <b>Membership panel setup complete!</b>\nConfigure settings in Admin Panel.");
+  _setupMembershipPanel();
+  Bot.sendMessage("✅ Membership Checker panel setup complete!");
   return true;
 }
 
-/* Get membership options */
-function getMembershipOptions() {
-  return AdminPanel.getPanelValues("MembershipSettings") || {};
+function _getMembershipOptions() {
+  return AdminPanel.getPanelValues("MembershipChecker") || {};
 }
 
-/* Get required chats as array */
-function getRequiredChats() {
-  const options = getMembershipOptions();
-  if (!options.requiredChats || options.requiredChats.trim() === "") {
-    return [];
-  }
+function _debugInfo(info) {
+  let opts = _getMembershipOptions();
+  if (!opts.debug) return;
   
-  let chats = options.requiredChats.split(",");
+  Api.sendMessage({
+    chat_id: user.telegramid,
+    text: "<b>Membership Debug</b>\n" + info,
+    parse_mode: "HTML"
+  });
+}
+
+function _getChatsArr() {
+  let opts = _getMembershipOptions();
+  if (!opts.chats) return [];
+  
+  let chats = opts.chats.split(",");
   let result = [];
   
   for (let i = 0; i < chats.length; i++) {
@@ -400,205 +381,190 @@ function getRequiredChats() {
   return result;
 }
 
-/* Check if user is member of specific chat */
-function isMemberOfChat(chatId) {
-  if (!chatId || !user) return false;
+function _getUserData() {
+  if (!user) return { chats: {} };
   
-  try {
-    const result = Api.getChatMemberSync({
-      chat_id: chatId,
-      user_id: user.telegramid
-    });
-    
-    if (result && result.status) {
-      const validStatuses = ["member", "administrator", "creator", "restricted"];
-      return validStatuses.includes(result.status);
-    }
-    
-    return false;
-  } catch (error) {
-    console.log("Error checking membership for " + chatId + ": " + error);
-    return false;
-  }
+  let userData = User.getProperty(MEMBERSHIP_KEY + "data");
+  if (!userData) userData = { chats: {} };
+  if (!userData.chats) userData.chats = {};
+  
+  return userData;
 }
 
-/* Main membership check */
-function checkMembership() {
-  const options = getMembershipOptions();
-  const chats = getRequiredChats();
+function _saveUserData(userData) {
+  User.setProperty(MEMBERSHIP_KEY + "data", userData, "json");
+}
+
+function _isJoined(response) {
+  if (!response || !response.result) return false;
+  let status = response.result.status;
+  return ["member", "administrator", "creator", "restricted"].includes(status);
+}
+
+function _checkSingleChat(chatId, callback) {
+  Api.getChatMember({
+    chat_id: chatId,
+    user_id: user.telegramid,
+    on_result: MEMBERSHIP_KEY + "checkResult " + chatId + " " + callback,
+    on_error: MEMBERSHIP_KEY + "checkError " + chatId
+  });
+}
+
+function _runCallback(callbackName, chatId, result) {
+  let opts = _getMembershipOptions();
+  let command = opts[callbackName];
+  
+  if (!command) {
+    _debugInfo("Callback not set: " + callbackName);
+    return false;
+  }
+  
+  Bot.run({
+    command: command,
+    options: {
+      chat_id: chatId,
+      result: result,
+      is_member: _isJoined({result: result})
+    }
+  });
+  
+  return true;
+}
+
+function check(passedOptions) {
+  let userData = _getUserData();
+  let chats = _getChatsArr();
   
   if (chats.length === 0) {
-    return { 
-      isMember: true, 
-      missingChats: [], 
-      joinedChats: [], 
-      total: 0,
-      joinedCount: 0,
-      missingCount: 0
-    };
+    Bot.sendMessage("⚠️ No channels configured for membership check");
+    return;
   }
   
-  const checkMode = options.checkMode || "all";
-  const missingChats = [];
-  const joinedChats = [];
+  // Anti-spam: 2 seconds cooldown
+  if (userData.lastCheck && (Date.now() - userData.lastCheck) < 2000) {
+    return;
+  }
   
+  userData.lastCheck = Date.now();
+  _saveUserData(userData);
+  
+  _debugInfo("Starting membership check for " + chats.length + " chats");
+  
+  // Check all chats
   for (let i = 0; i < chats.length; i++) {
-    let chat = chats[i];
-    if (isMemberOfChat(chat)) {
-      joinedChats.push(chat);
-    } else {
-      missingChats.push(chat);
-    }
+    _checkSingleChat(chats[i], passedOptions || "check");
   }
-  
-  let isMember = false;
-  
-  if (checkMode === "any") {
-    isMember = joinedChats.length > 0;
-  } else {
-    isMember = missingChats.length === 0;
-  }
-  
-  return {
-    isMember: isMember,
-    missingChats: missingChats,
-    joinedChats: joinedChats,
-    total: chats.length,
-    joinedCount: joinedChats.length,
-    missingCount: missingChats.length
-  };
 }
 
-/* Show membership status */
-function showMembershipStatus() {
-  const options = getMembershipOptions();
-  const result = checkMembership();
+function handle(passedOptions) {
+  if (!user) return;
   
-  if (result.isMember) {
-    const message = options.successMessage || "✅ You have access to all required channels!";
-    send(user.telegramid, message);
-    return true;
-  }
-  
-  // User needs to join
-  let message = options.requiredMessage || "❌ Please join required channels to continue";
-  
-  if (result.missingChats.length > 0) {
-    const mode = options.checkMode === "any" ? "any of these" : "all of these";
-    message += "\n\n📋 Required channels (join " + mode + "):";
-    
-    for (let i = 0; i < result.missingChats.length; i++) {
-      message += "\n" + (i + 1) + ". " + result.missingChats[i];
-    }
-  }
-  
-  // Create inline keyboard with join buttons
-  let keyboard = [];
-  if (options.showJoinButtons && result.missingChats.length > 0) {
-    for (let i = 0; i < result.missingChats.length; i++) {
-      let chat = result.missingChats[i];
-      
-      // Extract username from chat format
-      let username = chat;
-      if (chat.startsWith('@')) {
-        username = chat.substring(1);
-        keyboard.push([
-          { 
-            text: "Join " + chat, 
-            url: "https://t.me/" + username 
-          }
-        ]);
-      } else if (chat.startsWith('-100')) {
-        // For group IDs, can't create direct link
-        continue;
-      }
-    }
-    
-    // Add check button
-    if (keyboard.length > 0) {
-      keyboard.push([
-        { 
-          text: "🔄 Check Again", 
-          callback_data: "/checkMembership" 
-        }
-      ]);
-    }
-  }
-  
-  if (keyboard.length > 0) {
-    send(user.telegramid, message, keyboard);
-  } else {
-    send(user.telegramid, message);
-  }
-  
-  return false;
-}
-
-/* Protect command with membership check */
-function protectCommand(commandCallback) {
-  return function() {
-    const result = checkMembership();
-    
-    if (!result.isMember) {
-      showMembershipStatus();
-      return;
-    }
-    
-    // User is member, execute the command
-    commandCallback();
-  };
-}
-
-/* Auto-check handler for @ command */
-function handleMembership() {
-  const options = getMembershipOptions();
-  
-  if (!options.autoCheck) return;
+  let opts = _getMembershipOptions();
+  if (!opts.chats) return;
   
   // Skip internal commands
-  const skipCommands = ["/start", "/check", "/setup", "/ping", "/admin", "/membership"];
-  
-  let shouldSkip = false;
+  let skipCommands = ["/start", "/check", "/setup"];
   for (let i = 0; i < skipCommands.length; i++) {
     if (message && message.startsWith(skipCommands[i])) {
-      shouldSkip = true;
-      break;
+      return;
     }
   }
   
-  if (shouldSkip) return;
+  let userData = _getUserData();
+  let checkTime = opts.checkTime || 20;
   
-  const result = checkMembership();
-  
-  if (!result.isMember) {
-    // Cooldown to avoid spam
-    const lastCheck = User.getProperty(LIB + "lastMembershipCheck");
-    const now = Date.now();
-    
-    if (!lastCheck || (now - lastCheck) > 30000) { // 30 seconds cooldown
-      User.setProperty(LIB + "lastMembershipCheck", now, "integer");
-      showMembershipStatus();
+  // Check if enough time has passed
+  if (userData.lastHandleCheck) {
+    let minutesPassed = (Date.now() - userData.lastHandleCheck) / 60000;
+    if (minutesPassed < checkTime) {
+      return;
     }
   }
+  
+  userData.lastHandleCheck = Date.now();
+  _saveUserData(userData);
+  
+  check(passedOptions);
 }
 
-/* Manual membership check command */
-function checkMembershipCommand() {
-  const result = checkMembership();
+function isMember(chatId) {
+  if (chatId) {
+    // Check single chat
+    try {
+      let result = Api.getChatMemberSync({
+        chat_id: chatId,
+        user_id: user.telegramid
+      });
+      return _isJoined({result: result});
+    } catch (e) {
+      return false;
+    }
+  }
   
-  if (result.isMember) {
-    send(user.telegramid, "✅ <b>Membership Status:</b> You have access!");
+  // Check all chats
+  let chats = _getChatsArr();
+  let notJoined = [];
+  
+  for (let i = 0; i < chats.length; i++) {
+    try {
+      let result = Api.getChatMemberSync({
+        chat_id: chats[i],
+        user_id: user.telegramid
+      });
+      if (!_isJoined({result: result})) {
+        notJoined.push(chats[i]);
+      }
+    } catch (e) {
+      notJoined.push(chats[i]);
+    }
+  }
+  
+  return notJoined.length === 0;
+}
+
+function getChats() {
+  return _getMembershipOptions().chats || "";
+}
+
+function getNotJoinedChats() {
+  let chats = _getChatsArr();
+  let notJoined = [];
+  
+  for (let i = 0; i < chats.length; i++) {
+    if (!isMember(chats[i])) {
+      notJoined.push(chats[i]);
+    }
+  }
+  
+  return notJoined.join(", ");
+}
+
+/* Event Handlers */
+on(MEMBERSHIP_KEY + "checkResult", function() {
+  let parts = params.split(" ");
+  let chatId = parts[0];
+  let callbackType = parts[1] || "check";
+  
+  let userData = _getUserData();
+  let isMemberNow = _isJoined(options);
+  
+  // Store current status
+  userData.chats[chatId] = {
+    joined: isMemberNow,
+    lastCheck: Date.now()
+  };
+  _saveUserData(userData);
+  
+  if (isMemberNow) {
+    _runCallback("onJoining", chatId, options.result);
   } else {
-    showMembershipStatus();
+    _runCallback("onNeedJoining", chatId, options.result);
   }
-  
-  return result;
-}
+});
 
-/* Get membership info */
-function getMembershipInfo() {
-  return checkMembership();
-}
+on(MEMBERSHIP_KEY + "checkError", function() {
+  _debugInfo("Error checking chat: " + params + " - " + JSON.stringify(options));
+});
 
 /* ===============================
    EXPORT API
@@ -617,16 +583,13 @@ publish({
   showAdminList: showAdminList,
   owner: getOwner,
   
-  // Membership system
+  // Membership checker (MCL style)
   setupMembership: setupMembership,
-  checkMembership: checkMembershipCommand,
-  showMembershipStatus: showMembershipStatus,
-  protect: protectCommand,
-  handleMembership: handleMembership,
-  getMembershipInfo: getMembershipInfo,
-  getRequiredChats: getRequiredChats
+  check: check,
+  handle: handle,
+  isMember: isMember,
+  getChats: getChats,
+  getNotJoinedChats: getNotJoinedChats
 });
 
-/* Event handlers */
 on(LIB + "onPing", ping);
-on("/checkMembership", checkMembershipCommand);
