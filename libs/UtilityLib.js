@@ -9,13 +9,14 @@
  *   removeAdmin()
  *   showAdminList()
  *
- * Added: Simplified Membership Checker (MembershipCheckerSimple)
+ * Added: Simplified Membership Checker (fast & grouped)
  *   - mcSetup()
  *   - mcHandle()
- *   - mcCheck()
+ *   - mcCheck(passed_options)
  *   - mcIsMember(chat_id)
  *   - mcNotJoined()
  *   - mcGetChats()
+ *   - mcRequireAll()  // helper to protect commands (returns true if allowed)
  *
  * Internal prefix for membership module: UtilityLib_MC_
  */
@@ -31,6 +32,7 @@ const ADMINS_KEY = LIB + "admins";
 const MC_PREFIX = "UtilityLib_MC_";
 const MC_PANEL  = "MembershipCheckerSimple";
 const MC_USER_DATA_KEY = MC_PREFIX + "Data";
+const MC_MAX_CHATS = 10;
 
 /* Basic sender */
 function send(to, text) {
@@ -273,7 +275,7 @@ function iteration(mode) {
 }
 
 /* ------------------------------
-   Membership Checker - Simple
+   Membership Checker - Improved Simple
 -------------------------------- */
 
 /* Admin Panel setup */
@@ -286,9 +288,9 @@ function mcSetup() {
       {
         name: "chats",
         title: "Chats or channels for checking",
-        description: "must be separated by commas (e.g. @channel1, @chat2)",
+        description: "must be separated by commas (e.g. @channel1, @chat2 or -100123... )",
         type: "string",
-        placeholder: "@myChannel, @myChat",
+        placeholder: "@myChannel, -100123456789",
         icon: "chatbubbles"
       },
       {
@@ -303,7 +305,7 @@ function mcSetup() {
       {
         name: "onNeedJoin",
         title: "onNeedJoin command",
-        description: "if the user does not have membership to ANY chat, this command will be executed",
+        description: "if the user does not have membership to ANY chat, this command will be executed (single call, options.missing = [..])",
         type: "string",
         placeholder: "/onNeedJoin",
         icon: "warning"
@@ -311,7 +313,7 @@ function mcSetup() {
       {
         name: "onJoined",
         title: "onJoined command",
-        description: "if the user just received membership for ANY chat this command will be executed",
+        description: "if the user just received membership to any chat this command will be executed once (options.newly_joined = [..])",
         type: "string",
         placeholder: "/onJoined",
         icon: "person-add"
@@ -319,7 +321,7 @@ function mcSetup() {
       {
         name: "onAllJoined",
         title: "onAllJoined command",
-        description: "if the user just received membership for ALL chats this command will be executed",
+        description: "if the user just received membership for ALL chats this command will be executed once",
         type: "string",
         placeholder: "/onAllJoined",
         icon: "happy"
@@ -366,7 +368,7 @@ function _mcGetUserData() {
     throw new Error("MembershipChecker: user is not exist. Use mcCheck only in user context.");
   }
   let userData = User.getProperty(MC_USER_DATA_KEY);
-  if (!userData) userData = { lastCheck: 0, chats: {} };
+  if (!userData) userData = { lastCheck: 0, chats: {}, token: null, pending: 0 };
   if (!userData.chats) userData.chats = {};
   return userData;
 }
@@ -376,11 +378,17 @@ function _mcSaveUserData(userData) {
   User.setProperty(MC_USER_DATA_KEY, userData, "json");
 }
 
-/* split chats string into array */
+/* split chats string into array (and validation) */
 function _mcGetChatsArr() {
   const opts = _mcGetLibOptions();
   if (!opts.chats) return [];
   let chats = opts.chats.split(",").map(c => c.trim()).filter(Boolean);
+
+  // enforce max channels
+  if (chats.length > MC_MAX_CHATS) {
+    throw new Error("MembershipChecker: maximum allowed channels is " + MC_MAX_CHATS);
+  }
+
   return chats;
 }
 
@@ -403,41 +411,51 @@ function _mcIsSpamCall(lastCheck) {
 }
 
 /* Public: manual check - runs immediate checks for all chats
-   options can be any object to forward to callbacks
+   passed_options can be any object forwarded to callbacks
 */
 function mcCheck(passed_options) {
   const userData = _mcGetUserData();
 
-  _mcDebug("mcCheck for userData: " + JSON.stringify(userData));
+  _mcDebug("mcCheck start for user: " + user.telegramid);
 
   if (_mcIsSpamCall(userData.lastCheck)) {
     _mcDebug("mcCheck spam - skipped");
     return;
   }
 
-  userData.lastCheck = Date.now();
-  _mcSaveUserData(userData);
-
   const chats = _mcGetChatsArr();
   if (!chats.length) {
     throw new Error("MembershipChecker: no chats configured in Admin Panel");
   }
 
-  // create background tasks for each chat
+  // prepare a unique token for this check (to ignore late/old responses)
+  const token = Date.now() + "_" + Math.round(Math.random() * 10000);
+
+  // set pending & token & temp storage in userData
+  userData.lastCheck = Date.now();
+  userData.token = token;
+  userData.pending = chats.length;
+  userData.temp = { results: {} }; // per-chat boolean
+  _mcSaveUserData(userData);
+
+  // launch parallel checks (very small delay)
   for (let i = 0; i < chats.length; i++) {
     const chat = chats[i];
     Bot.run({
       command: MC_PREFIX + "checkMembership " + chat,
       options: {
+        token: token,
         time: userData.lastCheck,
         bb_options: passed_options
       },
-      run_after: 1
+      run_after: 0.01
     });
   }
 }
 
-/* Public: handle for before-all (@) command - runs only if delay passed */
+/* Public: handle for before-all (@) command - runs only if delay passed.
+   This method is optional for developers.
+*/
 function mcHandle(passed_options) {
   if (!user) return; // only for private user context
 
@@ -470,15 +488,15 @@ function checkMembership() {
   Api.getChatMember({
     chat_id: chat_id,
     user_id: user.telegramid,
+    // pass through token and user bb_options
     on_result: MC_PREFIX + "onCheckMembership " + chat_id,
     on_error: MC_PREFIX + "onError " + chat_id,
-    bb_options: options // pass options for callbacks
+    bb_options: options
   });
 }
 
 /* Determine membership from Api response object */
 function _mcIsMemberFromApiResponse(resp) {
-  // resp.result.status may be 'member', 'administrator', 'creator', 'left', 'kicked', etc.
   try {
     const status = resp.result.status;
     return ["member", "administrator", "creator"].includes(status);
@@ -490,91 +508,168 @@ function _mcIsMemberFromApiResponse(resp) {
 /* Called when Api.getChatMember succeeded (background) */
 function onCheckMembership() {
   let chat_id = params.split(" ")[0];
+  const resp = options; // options contains Api response and our bb_options
+  const token = options.bb_options && options.bb_options.token ? options.bb_options.token : options.token;
 
+  // load up-to-date userData
   let userData = _mcGetUserData();
-  // ensure lastCheck from calling options.time if provided
-  if (options && options.time) {
-    userData.lastCheck = options.time;
-  }
 
-  _mcDebug("onCheckMembership: chat=" + chat_id + " options=" + JSON.stringify(options) + " userData=" + JSON.stringify(userData));
-
-  const isNowMember = _mcIsMemberFromApiResponse(options);
-
-  const prevState = !!userData.chats[chat_id];
-  userData.chats[chat_id] = isNowMember;
-  _mcSaveUserData(userData);
-
-  const opts = _mcGetLibOptions();
-
-  // If not member -> run onNeedJoin
-  if (!isNowMember) {
-    if (opts.onNeedJoin) {
-      _mcDebug("Running onNeedJoin for " + chat_id);
-      Bot.run({
-        command: opts.onNeedJoin,
-        options: {
-          chat_id: chat_id,
-          result: options.result,
-          bb_options: options.bb_options
-        }
-      });
-    }
+  // validate token (ignore old checks)
+  const respToken = options.token || (options.bb_options && options.bb_options.token);
+  if (!respToken || respToken !== userData.token) {
+    _mcDebug("onCheckMembership: token mismatch or expired for chat " + chat_id + " respToken=" + respToken + " userToken=" + userData.token);
     return;
   }
 
-  // is member now
-  // if previously not a member -> just joined
-  if (!prevState && isNowMember) {
-    if (opts.onJoined) {
-      _mcDebug("Running onJoined for " + chat_id);
-      Bot.run({
-        command: opts.onJoined,
-        options: {
-          chat_id: chat_id,
-          result: options.result,
-          bb_options: options.bb_options
-        }
-      });
-    }
-  }
+  // compute membership result
+  const isNowMember = _mcIsMemberFromApiResponse(options);
 
-  // check if user joined ALL chats now
-  const allChats = _mcGetChatsArr();
-  const stillNotJoined = allChats.filter(c => !userData.chats[c]);
-  if (stillNotJoined.length === 0) {
-    // user is member of all chats
-    if (opts.onAllJoined) {
-      _mcDebug("Running onAllJoined (user joined all chats)");
-      Bot.run({
-        command: opts.onAllJoined,
-        options: {
-          result: options.result,
-          bb_options: options.bb_options
-        }
-      });
-    }
-  }
+  // save temp results
+  if (!userData.temp) userData.temp = { results: {} };
+  userData.temp.results[chat_id] = isNowMember;
+
+  // decrement pending
+  userData.pending = (userData.pending || 1) - 1;
+
+  _mcDebug("onCheckMembership: chat=" + chat_id + " isMember=" + isNowMember + " pending=" + userData.pending);
+
+  // save progress
+  _mcSaveUserData(userData);
+
+  // if still waiting for other responses -> wait
+  if (userData.pending > 0) return;
+
+  // all responses collected -> finalize single grouped callback
+  _mcFinalizeCheck(options);
 }
 
 /* Called on Api error */
 function onMCError() {
-  _mcDebug("onMCError: for chat=" + params + " options=" + JSON.stringify(options));
+  // simply decrement pending if token matches and continue
+  let chat_id = params.split(" ")[0];
+  let userData = _mcGetUserData();
+
+  const respToken = options.token || (options.bb_options && options.bb_options.token);
+  if (!respToken || respToken !== userData.token) {
+    _mcDebug("onMCError: token mismatch/old for chat " + chat_id);
+    return;
+  }
+
+  // treat error as "not joined" (safe)
+  if (!userData.temp) userData.temp = { results: {} };
+  userData.temp.results[chat_id] = false;
+  userData.pending = (userData.pending || 1) - 1;
+  _mcDebug("onMCError: chat=" + chat_id + " marked not-joined, pending=" + userData.pending);
+  _mcSaveUserData(userData);
+
+  if (userData.pending > 0) return;
+  _mcFinalizeCheck(options);
+}
+
+/* Finalize after all responses arrived */
+function _mcFinalizeCheck(apiOptions) {
+  let userData = _mcGetUserData();
   const opts = _mcGetLibOptions();
-  // no dedicated onError callback in minimal version - we won't run any command
-  // But if someone put an "onNeedJoin" as error handler, we avoid executing it unexpectedly.
+
+  const chats = _mcGetChatsArr();
+  const results = (userData.temp && userData.temp.results) ? userData.temp.results : {};
+
+  // build lists
+  let missing = [];
+  let newlyJoined = [];
+
+  for (let i = 0; i < chats.length; i++) {
+    const ch = chats[i];
+    const prev = !!userData.chats[ch];
+    const now = !!results[ch];
+
+    if (!now) missing.push(ch);
+    if (!prev && now) newlyJoined.push(ch);
+
+    // store final state
+    userData.chats[ch] = now;
+  }
+
+  // cleanup temp fields
+  userData.token = null;
+  userData.pending = 0;
+  userData.temp = null;
+  userData.lastCheck = Date.now();
+  _mcSaveUserData(userData);
+
+  _mcDebug("_mcFinalizeCheck: missing=" + JSON.stringify(missing) + " newlyJoined=" + JSON.stringify(newlyJoined));
+
+  // Run grouped callbacks (each executed at most once and only if installed)
+  // Priority:
+  // 1) if missing -> onNeedJoin (single call) with options.missing = [...]
+  // 2) else if newlyJoined -> onJoined (single call) with options.newly_joined = [...]
+  // 3) else -> onAllJoined (single call)
+
+  if (missing.length > 0) {
+    if (opts.onNeedJoin) {
+      Bot.run({
+        command: opts.onNeedJoin,
+        options: {
+          missing: missing,
+          bb_options: apiOptions.bb_options
+        }
+      });
+    } else {
+      _mcDebug("onNeedJoin not configured - skip");
+    }
+    return;
+  }
+
+  // no missing -> all joined
+  if (newlyJoined.length > 0) {
+    if (opts.onJoined) {
+      Bot.run({
+        command: opts.onJoined,
+        options: {
+          newly_joined: newlyJoined,
+          bb_options: apiOptions.bb_options
+        }
+      });
+    } else {
+      _mcDebug("onJoined not configured - skip");
+    }
+
+    // also if all are joined now -> fire onAllJoined as well (if installed)
+    const isAllNow = chats.every(c => userData.chats[c]);
+    if (isAllNow && opts.onAllJoined) {
+      Bot.run({
+        command: opts.onAllJoined,
+        options: {
+          bb_options: apiOptions.bb_options
+        }
+      });
+    } else {
+      _mcDebug("onAllJoined not configured or not all joined - skip");
+    }
+    return;
+  }
+
+  // nothing newly joined and not missing => still joined (all were already joined)
+  if (opts.onAllJoined) {
+    Bot.run({
+      command: opts.onAllJoined,
+      options: {
+        bb_options: apiOptions.bb_options
+      }
+    });
+  } else {
+    _mcDebug("onAllJoined not configured - skip");
+  }
 }
 
 /* Public helper: isMember (single chat or all) */
 function mcIsMember(chat_id) {
-  const opts = _mcGetLibOptions();
   const userData = _mcGetUserData();
 
   if (chat_id) {
     return !!userData.chats[chat_id];
   }
 
-  // all chats
   const chats = _mcGetChatsArr();
   if (!chats.length) {
     throw new Error("MembershipChecker: no chats configured in Admin Panel");
@@ -597,9 +692,49 @@ function mcGetChats() {
   return opts.chats || "";
 }
 
+/* Public: require all -> used to protect commands.
+   If not joined all -> sends a default join prompt message and returns false.
+   If joined -> returns true.
+*/
+function mcRequireAll() {
+  // must be run in user context
+  if (!user) {
+    _mcDebug("mcRequireAll: no user context");
+    return false;
+  }
+
+  const chats = _mcGetChatsArr();
+  if (!chats.length) {
+    throw new Error("MembershipChecker: no chats configured in Admin Panel");
+  }
+
+  const userData = _mcGetUserData();
+  const missing = chats.filter(c => !userData.chats[c]);
+
+  if (missing.length === 0) return true;
+
+  // send a single combined join prompt (developer may still set callbacks but mcRequireAll shows a single message)
+  let text = "⛔ <b>Access blocked</b>\nYou must join the following channels to use this command:\n\n";
+  missing.forEach(m => { text += "• " + m + "\n"; });
+
+  // default private channel join link is not known here - dev should include link in /start message
+  Api.sendMessage({
+    chat_id: user.telegramid,
+    text: text,
+    parse_mode: "HTML",
+    reply_markup: {
+      inline_keyboard: [
+        [{ text: "✅ CHECK", callback_data: "check_membership" }]
+      ]
+    }
+  });
+
+  return false;
+}
+
 /* Register membership background handlers */
 on(MC_PREFIX + "checkMemberships", function() {
-  // iterate chats and run small tasks
+  // iterate chats and run small tasks (legacy)
   const chats = _mcGetChatsArr();
   _mcDebug("checkMemberships: will iterate " + JSON.stringify(chats));
   for (let i = 0; i < chats.length; i++) {
@@ -607,7 +742,7 @@ on(MC_PREFIX + "checkMemberships", function() {
     Bot.run({
       command: MC_PREFIX + "checkMembership " + chat,
       options: options,
-      run_after: 1
+      run_after: 0.01
     });
   }
 });
@@ -619,7 +754,6 @@ on(MC_PREFIX + "onError", onMCError);
 /* ------------------------------
    EXPORT API (merge with existing)
 -------------------------------- */
-/* Note: keep existing exported methods and append membership API */
 publish({
   ping: ping,
   iteration: iteration,
@@ -637,5 +771,6 @@ publish({
   mcCheck: mcCheck,
   mcIsMember: mcIsMember,
   mcNotJoined: mcNotJoined,
-  mcGetChats: mcGetChats
+  mcGetChats: mcGetChats,
+  mcRequireAll: mcRequireAll
 });
