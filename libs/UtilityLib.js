@@ -22,17 +22,30 @@ const ADMINS_KEY = LIB + "admins";
 const MEMBERSHIP_KEY = LIB + "membership";
 
 /* Basic sender */
-function send(to, text, keyboard = null) {
-  const msg = { chat_id: to, text: text, parse_mode: "HTML" };
-  if (keyboard) msg.reply_markup = { inline_keyboard: keyboard };
+function send(to, text, keyboard) {
+  let msg = { chat_id: to, text: text, parse_mode: "HTML" };
+  if (keyboard) {
+    msg.reply_markup = { inline_keyboard: keyboard };
+  }
   Api.sendMessage(msg);
 }
 
 /* Helpers */
-function getOwner() { return Bot.getProperty(OWNER_KEY); }
-function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
-function setAdmins(list) { Bot.setProperty(ADMINS_KEY, list, "json"); }
-function isNumeric(v) { return /^\d+$/.test(String(v)); }
+function getOwner() { 
+  return Bot.getProperty(OWNER_KEY); 
+}
+
+function getAdmins() { 
+  return Bot.getProperty(ADMINS_KEY) || []; 
+}
+
+function setAdmins(list) { 
+  Bot.setProperty(ADMINS_KEY, list, "json"); 
+}
+
+function isNumeric(v) { 
+  return /^\d+$/.test(String(v)); 
+}
 
 /* ------------------------------
    OWNER SETUP (run once)
@@ -133,7 +146,10 @@ function removeAdmin(id) {
     return false;
   }
 
-  admins = admins.filter(a => a !== id);
+  admins = admins.filter(function(a) {
+    return a !== id;
+  });
+  
   setAdmins(admins);
 
   send(user.telegramid, `🗑 <b>Admin Removed:</b> <code>${id}</code>`);
@@ -156,12 +172,15 @@ function showAdminList() {
   }
 
   let admins = getAdmins();
-  if (admins.length === 0) return send(user.telegramid, "⚠️ <b>No admins found.</b>");
+  if (admins.length === 0) {
+    send(user.telegramid, "⚠️ <b>No admins found.</b>");
+    return;
+  }
 
   let msg = "👮 <b>Admins List</b>\n\n";
   let index = 1;
 
-  admins.forEach(id => {
+  admins.forEach(function(id) {
     let role = id === owner ? " (<b>Owner</b>)" : " (<i>Admin</i>)";
     msg += `${index}. <code>${id}</code>${role}\n`;
     index++;
@@ -176,7 +195,7 @@ function showAdminList() {
    PING
 -------------------------------- */
 function ping() {
-  if (options?.result) {
+  if (options && options.result) {
     let latency = Date.now() - options.bb_options.start;
 
     Api.editMessageText({
@@ -197,8 +216,6 @@ function ping() {
   });
 }
 
-on(LIB + "onPing", ping);
-
 /* ------------------------------
    ITERATION (3 modes)
 -------------------------------- */
@@ -207,17 +224,29 @@ function iteration(mode) {
   if (!d) return null;
 
   const enriched = {
-    ...d,
+    id: d.id,
+    progress: d.progress,
+    limit: d.limit,
+    have_ads: d.have_ads,
+    extra_points: d.extra_points,
+    started_at: d.started_at,
+    ended_at: d.ended_at,
     pct: ((d.progress / d.limit) * 100).toFixed(2),
-    type: d.quotum_type?.name || "Unknown",
-    base_limit: d.quotum_type?.base_limit
+    type: (d.quotum_type && d.quotum_type.name) || "Unknown",
+    base_limit: (d.quotum_type && d.quotum_type.base_limit) || 0
   };
 
   /* PICK MODE (multiple comma-separated keys) */
   if (mode && mode.includes(",")) {
-    let keys = mode.split(",").map(k => k.trim());
+    let keys = mode.split(",").map(function(k) {
+      return k.trim();
+    });
+    
     let obj = {};
-    keys.forEach(k => { obj[k] = enriched[k]; });
+    keys.forEach(function(k) {
+      obj[k] = enriched[k];
+    });
+    
     return obj;
   }
 
@@ -236,13 +265,18 @@ function iteration(mode) {
   }
 
   /* FORMATTED MESSAGE */
-  const BAR = 25, FULL = "█", EMPTY = "░";
+  const BAR = 25;
+  const FULL = "█";
+  const EMPTY = "░";
   let fill = Math.round((enriched.pct / 100) * BAR);
   let bar = `[ ${FULL.repeat(fill)}${EMPTY.repeat(BAR - fill)} ]`;
 
   function fmt(t) {
-    try { return new Date(t).toLocaleString(); }
-    catch { return t; }
+    try { 
+      return new Date(t).toLocaleString(); 
+    } catch (e) { 
+      return t; 
+    }
   }
 
   let msg =
@@ -353,10 +387,17 @@ function getRequiredChats() {
     return [];
   }
   
-  return options.requiredChats
-    .split(",")
-    .map(chat => chat.trim())
-    .filter(chat => chat.length > 0);
+  let chats = options.requiredChats.split(",");
+  let result = [];
+  
+  for (let i = 0; i < chats.length; i++) {
+    let chat = chats[i].trim();
+    if (chat.length > 0) {
+      result.push(chat);
+    }
+  }
+  
+  return result;
 }
 
 /* Check if user is member of specific chat */
@@ -369,10 +410,14 @@ function isMemberOfChat(chatId) {
       user_id: user.telegramid
     });
     
-    const validStatuses = ["member", "administrator", "creator", "restricted"];
-    return validStatuses.includes(result?.status);
+    if (result && result.status) {
+      const validStatuses = ["member", "administrator", "creator", "restricted"];
+      return validStatuses.includes(result.status);
+    }
+    
+    return false;
   } catch (error) {
-    console.error(`Error checking membership for ${chatId}:`, error);
+    console.log("Error checking membership for " + chatId + ": " + error);
     return false;
   }
 }
@@ -383,14 +428,22 @@ function checkMembership() {
   const chats = getRequiredChats();
   
   if (chats.length === 0) {
-    return { isMember: true, missingChats: [], joinedChats: [], total: 0 };
+    return { 
+      isMember: true, 
+      missingChats: [], 
+      joinedChats: [], 
+      total: 0,
+      joinedCount: 0,
+      missingCount: 0
+    };
   }
   
   const checkMode = options.checkMode || "all";
   const missingChats = [];
   const joinedChats = [];
   
-  for (const chat of chats) {
+  for (let i = 0; i < chats.length; i++) {
+    let chat = chats[i];
     if (isMemberOfChat(chat)) {
       joinedChats.push(chat);
     } else {
@@ -402,14 +455,14 @@ function checkMembership() {
   
   if (checkMode === "any") {
     isMember = joinedChats.length > 0;
-  } else { // "all"
+  } else {
     isMember = missingChats.length === 0;
   }
   
   return {
-    isMember,
-    missingChats,
-    joinedChats,
+    isMember: isMember,
+    missingChats: missingChats,
+    joinedChats: joinedChats,
     total: chats.length,
     joinedCount: joinedChats.length,
     missingCount: missingChats.length
@@ -432,44 +485,52 @@ function showMembershipStatus() {
   
   if (result.missingChats.length > 0) {
     const mode = options.checkMode === "any" ? "any of these" : "all of these";
-    message += `\n\n📋 Required channels (join ${mode}):`;
+    message += "\n\n📋 Required channels (join " + mode + "):";
     
-    result.missingChats.forEach((chat, index) => {
-      message += `\n${index + 1}. ${chat}`;
-    });
+    for (let i = 0; i < result.missingChats.length; i++) {
+      message += "\n" + (i + 1) + ". " + result.missingChats[i];
+    }
   }
   
   // Create inline keyboard with join buttons
   let keyboard = [];
   if (options.showJoinButtons && result.missingChats.length > 0) {
-    result.missingChats.forEach(chat => {
+    for (let i = 0; i < result.missingChats.length; i++) {
+      let chat = result.missingChats[i];
+      
       // Extract username from chat format
       let username = chat;
       if (chat.startsWith('@')) {
         username = chat.substring(1);
+        keyboard.push([
+          { 
+            text: "Join " + chat, 
+            url: "https://t.me/" + username 
+          }
+        ]);
       } else if (chat.startsWith('-100')) {
         // For group IDs, can't create direct link
         continue;
       }
-      
-      keyboard.push([
-        { 
-          text: `Join ${chat}`, 
-          url: `https://t.me/${username}` 
-        }
-      ]);
-    });
+    }
     
     // Add check button
-    keyboard.push([
-      { 
-        text: "🔄 Check Again", 
-        callback_data: "/checkMembership" 
-      }
-    ]);
+    if (keyboard.length > 0) {
+      keyboard.push([
+        { 
+          text: "🔄 Check Again", 
+          callback_data: "/checkMembership" 
+        }
+      ]);
+    }
   }
   
-  send(user.telegramid, message, keyboard);
+  if (keyboard.length > 0) {
+    send(user.telegramid, message, keyboard);
+  } else {
+    send(user.telegramid, message);
+  }
+  
   return false;
 }
 
@@ -484,7 +545,7 @@ function protectCommand(commandCallback) {
     }
     
     // User is member, execute the command
-    commandCallback.apply(this, arguments);
+    commandCallback();
   };
 }
 
@@ -496,7 +557,16 @@ function handleMembership() {
   
   // Skip internal commands
   const skipCommands = ["/start", "/check", "/setup", "/ping", "/admin", "/membership"];
-  if (skipCommands.some(cmd => message?.startsWith(cmd))) return;
+  
+  let shouldSkip = false;
+  for (let i = 0; i < skipCommands.length; i++) {
+    if (message && message.startsWith(skipCommands[i])) {
+      shouldSkip = true;
+      break;
+    }
+  }
+  
+  if (shouldSkip) return;
   
   const result = checkMembership();
   
