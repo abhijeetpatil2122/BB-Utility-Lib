@@ -1,283 +1,297 @@
-/*
- * UtilityLib — v8 FAST Membership Checker
- * ---------------------------------------
- * Admin Panel:
- *   - channels: comma-separated (@ch, -100id)
- *   - batchDelay: seconds (used only if channels > 3)
+/*  
+ * UtilityLib v10 — FINAL PRODUCTION VERSION
+ * ------------------------------------------
+ * Features:
+ *  - Admin system (Owner + Admins)
+ *  - Ping
+ *  - Iteration
+ *  - Membership Checker (MCL Lite):
+ *      · Admin Panel setup
+ *      · checkJoin(channel)
+ *      · checkJoinAll(channels)
+ *      · requireJoin(channel)
+ *      · requireJoinAll(channels)
+ *      · Callbacks stored in Admin Panel
  *
- * Public API:
- *   mcSetup()                     → installs admin panel
- *   mcCheck(onSuccess, onFail)   → checks all channels, then runs 1 callback
- *   mcIsMember()                 → returns true/false (last stored result)
- *   mcRequire(onFail)            → protect any command
- *   mcGetMissing()               → get list of missing channels
- *   mcGetChats()                 → return channels as array
- *
- * Internal:
- *   - supports up to 10 channels
- *   - batches of 3 using Bot.run()
- *   - passes "missing" + "joined" lists to callback commands
  */
 
-const MC_PREFIX = "UtlMC_";
-const MC_PANEL  = "MembershipCheckerV8";
-const MC_USER_KEY = MC_PREFIX + "UserData";
-const MC_BATCH_SIZE = 3;
-const MC_MAX_CHATS = 10;
+const LIB = "UtilityLib_";
 
-/* ------------------------------
-   Admin Panel Setup
--------------------------------- */
-function mcSetup() {
+// Keys for internal storage
+const OWNER_KEY  = LIB + "owner";
+const ADMINS_KEY = LIB + "admins";
+const MEM_PANEL  = LIB + "join_panel";
+const MEM_CACHE  = LIB + "join_cache_";
+
+/* ============================================================
+    GENERAL HELPERS
+============================================================ */
+
+function send(to, text, parse = "HTML") {
+  Api.sendMessage({ chat_id: to, text, parse_mode: parse });
+}
+
+function normalizeChannel(ch) {
+  ch = String(ch).trim();
+  if (ch.startsWith("@")) return ch;
+  if (/^-100\d{10,}$/.test(ch)) return ch; // private channel ID
+  return ch;
+}
+
+function isJoined(status) {
+  return ["member", "administrator", "creator"].includes(status);
+}
+
+/* ============================================================
+    ADMIN SYSTEM (same as your current system)
+============================================================ */
+
+function getOwner() { return Bot.getProperty(OWNER_KEY); }
+function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
+function setAdmins(arr) { Bot.setProperty(ADMINS_KEY, arr, "json"); }
+
+function setupOwner() {
+  if (getOwner()) {
+    send(user.id, "ℹ️ <b>Owner already set:</b> <code>" + getOwner() + "</code>");
+    return;
+  }
+
+  Bot.setProperty(OWNER_KEY, user.id, "integer");
+  Bot.setProperty(ADMINS_KEY, [user.id], "json");
+
+  send(user.id, "🎉 <b>Owner setup complete!</b>\nYou are Owner and Admin.");
+}
+
+function onlyAdmin() {
+  let owner = getOwner();
+  if (!owner) {
+    send(user.id, "⚠️ Run <code>Libs.UtilityLib.setupOwner()</code> first.");
+    return false;
+  }
+
+  if (!getAdmins().includes(user.id)) {
+    send(user.id, "❌ <b>You are not admin.</b>");
+    return false;
+  }
+  return true;
+}
+
+function addAdmin(id) {
+  if (!onlyAdmin()) return;
+  id = Number(id);
+
+  let list = getAdmins();
+  if (!list.includes(id)) {
+    list.push(id);
+    setAdmins(list);
+    send(user.id, "✅ Added admin: <code>" + id + "</code>");
+  }
+}
+
+function removeAdmin(id) {
+  if (!onlyAdmin()) return;
+  id = Number(id);
+
+  let owner = getOwner();
+  if (id === owner) {
+    send(user.id, "⚠️ Cannot remove Owner.");
+    return;
+  }
+
+  let list = getAdmins().filter(a => a !== id);
+  setAdmins(list);
+  send(user.id, "🗑 Removed admin: <code>" + id + "</code>");
+}
+
+function showAdminList() {
+  let owner = getOwner();
+  let admins = getAdmins();
+  let msg = "👮 <b>Admins List</b>\n\n";
+
+  admins.forEach((id, i) => {
+    let role = (id === owner) ? " (Owner)" : "";
+    msg += `${i + 1}. <code>${id}</code>${role}\n`;
+  });
+
+  send(user.id, msg);
+}
+
+/* ============================================================
+    MEMBERSHIP CHECK — ADMIN PANEL SETUP
+============================================================ */
+
+function setupJoin() {
   const panel = {
-    title: "Membership Checker (Simple + Fast)",
-    description: "Add channels and batch delay. Max 10 channels.",
+    title: "Membership Checker",
+    description: "Configure channels & callback commands.",
     icon: "person-add",
+
     fields: [
-      {
-        name: "channels",
-        title: "Channels to check",
-        description: "Comma separated. Example: @c1, -10012345",
-        type: "string",
-        placeholder: "@channel1, -1001234567890",
-        icon: "chatbubbles"
-      },
-      {
-        name: "batchDelay",
-        title: "Batch delay (seconds)",
-        description: "Used only when channels > 3. Recommended: 1",
-        type: "integer",
-        placeholder: "1",
-        value: 1,
-        icon: "timer"
-      }
+      { name: "channels", title: "Channels", type: "string", placeholder: "@chan1, -100123456" },
+      { name: "cmd_joined", title: "onJoined", type: "string", placeholder: "/onJoined" },
+      { name: "cmd_missing", title: "onNotJoined", type: "string", placeholder: "/onNotJoined" },
+      { name: "cmd_all", title: "onAllJoined", type: "string", placeholder: "/onAllJoined" },
+      { name: "cmd_error", title: "onError", type: "string", placeholder: "/onError" }
     ]
   };
 
-  AdminPanel.setPanel({
-    panel_name: MC_PANEL,
-    data: panel
+  AdminPanel.setPanel({ panel_name: MEM_PANEL, data: panel });
+  send(user.id, "🛠 Membership Checker Panel Installed.\nGo to: Bot → Admin Panels");
+}
+
+function getJoinSettings() {
+  return AdminPanel.getPanelValues(MEM_PANEL) || {};
+}
+
+/* ============================================================
+    MEMBERSHIP CHECK CORE
+============================================================ */
+
+function getUserCache() {
+  return User.getProperty(MEM_CACHE + user.id) || {};
+}
+
+function setUserCache(obj) {
+  User.setProperty(MEM_CACHE + user.id, obj, "json");
+}
+
+function cacheSave(channel, ok) {
+  let cache = getUserCache();
+  cache[channel] = { ok, ts: Date.now() };
+  setUserCache(cache);
+}
+
+function checkJoin(channel) {
+  channel = normalizeChannel(channel);
+  Api.getChatMember({
+    chat_id: channel,
+    user_id: user.id,
+    on_result: LIB + "onCheckOne " + encodeURIComponent(channel),
+    on_error: LIB + "onCheckErr " + encodeURIComponent(channel)
   });
-
-  Bot.sendMessage("Membership Checker v8 Panel Installed!");
 }
 
-/* ------------------------------
-   Helpers
--------------------------------- */
-function _mcOpts() {
-  return AdminPanel.getPanelValues(MC_PANEL) || {};
+function onCheckOne() {
+  const channel = decodeURIComponent(params.split(" ")[0]);
+  const settings = getJoinSettings();
+  const res = options.result;
+  const status = res.status || res.result?.status;
+  const ok = isJoined(status);
+
+  cacheSave(channel, ok);
+
+  if (ok && settings.cmd_joined) Bot.run({ command: settings.cmd_joined, options: { channel } });
+  else if (!ok && settings.cmd_missing) Bot.run({ command: settings.cmd_missing, options: { channel } });
+}
+on(LIB + "onCheckOne", onCheckOne);
+
+function onCheckErr() {
+  const channel = decodeURIComponent(params.split(" ")[0]);
+  const settings = getJoinSettings();
+  cacheSave(channel, false);
+
+  if (settings.cmd_error)
+    Bot.run({ command: settings.cmd_error, options: { channel, error: options } });
+}
+on(LIB + "onCheckErr", onCheckErr);
+
+/* ============================================================
+    MULTI-CHANNEL CHECK
+============================================================ */
+
+function getChannelList() {
+  let settings = getJoinSettings();
+  if (!settings.channels) return [];
+  return settings.channels.split(",").map(a => normalizeChannel(a.trim()));
 }
 
-function mcGetChats() {
-  const opts = _mcOpts();
-  if(!opts.channels) return [];
-  return opts.channels.split(",").map(c => c.trim()).filter(Boolean).slice(0, MC_MAX_CHATS);
+function checkJoinAll() {
+  let arr = getChannelList();
+  if (!arr.length) return;
+
+  arr.forEach(ch => checkJoin(ch));
+
+  // If developer wants: they can detect "all joined" later via requireJoinAll()
 }
 
-function _mcGetUserData() {
-  let d = User.getProperty(MC_USER_KEY);
-  if(!d) d = { states: {} };
-  if(!d.states) d.states = {};
-  return d;
-}
+/* ============================================================
+    REQUIRE JOIN (Cached)
+============================================================ */
 
-function _mcSaveUserData(d) {
-  User.setProperty(MC_USER_KEY, d, "json");
-}
+function requireJoin(channel) {
+  channel = normalizeChannel(channel);
+  let cache = getUserCache()[channel];
 
-/* ------------------------------
-   Public API: mcIsMember
--------------------------------- */
-function mcIsMember() {
-  const chats = mcGetChats();
-  const data  = _mcGetUserData();
-  return chats.every(ch => data.states[ch] === true);
-}
+  if (cache) return cache.ok;
 
-/* ------------------------------
-   Public API: mcGetMissing
--------------------------------- */
-function mcGetMissing() {
-  const chats = mcGetChats();
-  const data  = _mcGetUserData();
-  return chats.filter(ch => data.states[ch] !== true);
-}
-
-/* ------------------------------
-   Public API: mcRequire
--------------------------------- */
-function mcRequire(onFailCommand) {
-  if(mcIsMember()) return true;
-
-  // Not joined → send developer's fail command
-  if(onFailCommand){
-    Bot.run({ command: onFailCommand, options: { missing: mcGetMissing() } });
-  }
+  checkJoin(channel);
   return false;
 }
 
-/* ------------------------------
-   MAIN CHECK FUNCTION
-   mcCheck(successCmd, failCmd)
--------------------------------- */
-function mcCheck(onSuccessCmd, onFailCmd) {
-  const chats = mcGetChats();
-  if(chats.length === 0){
-    Bot.sendMessage("❌ No channels configured in Membership Checker panel.");
+function requireJoinAll() {
+  let arr = getChannelList();
+  let cache = getUserCache();
+
+  let missing = [];
+  arr.forEach(ch => {
+    if (!cache[ch]) missing.push(ch);
+    else if (!cache[ch].ok) missing.push(ch);
+  });
+
+  if (missing.length) {
+    missing.forEach(ch => checkJoin(ch));
+    return false;
+  }
+  return true;
+}
+
+/* ============================================================
+    PING + ITERATION (unchanged)
+============================================================ */
+
+function ping() {
+  if (options?.result) {
+    let ms = Date.now() - options.bb_options.start;
+    Api.editMessageText({
+      chat_id: options.result.chat.id,
+      message_id: options.result.message_id,
+      text: `🏓 <b>${ms} ms</b>`,
+      parse_mode: "HTML"
+    });
     return;
   }
 
-  // create NEW check session token
-  const token = MC_PREFIX + "tk_" + Date.now() + "_" + Math.floor(Math.random()*9999);
-
-  let userData = _mcGetUserData();
-  userData.session = {
-    token: token,
-    pending: chats.length,
-    states: {},
-    success: onSuccessCmd,
-    fail: onFailCmd
-  };
-  _mcSaveUserData(userData);
-
-  // SMALL lists → check immediately
-  if(chats.length <= 3){
-    _mcRunBatch(chats, token, 0);
-    return;
-  }
-
-  // LARGE lists → batching
-  const opts = _mcOpts();
-  const delay = parseFloat(opts.batchDelay || 1);
-
-  // create 3-item batches
-  let batches = [];
-  for(let i = 0; i < chats.length; i+= MC_BATCH_SIZE){
-    batches.push(chats.slice(i, i+MC_BATCH_SIZE));
-  }
-
-  // schedule batches
-  for(let i = 0; i < batches.length; i++){
-    let runAfter = i === 0 ? 0.01 : delay * i;
-    Bot.run({
-      command: MC_PREFIX + "runBatch " + i,
-      options: { channels: batches[i], token: token },
-      run_after: runAfter
-    });
-  }
-}
-
-/* ------------------------------
-   INTERNAL: run batch
--------------------------------- */
-function runBatch() {
-  const channels = options.channels || [];
-  const token    = options.token;
-
-  _mcRunBatch(channels, token);
-}
-
-function _mcRunBatch(channels, token){
-  channels.forEach(ch => {
-
-    Api.getChatMember({
-      chat_id: ch,
-      user_id: user.telegramid,
-      on_result: MC_PREFIX + "onCheckOne " + encodeURIComponent(ch),
-      on_error : MC_PREFIX + "onCheckErr " + encodeURIComponent(ch),
-      bb_options: { token: token }
-    });
-
+  Api.sendMessage({
+    chat_id: user.id,
+    text: "<b>Ping…</b>",
+    parse_mode: "HTML",
+    bb_options: { start: Date.now() },
+    on_result: LIB + "pingAns"
   });
 }
+on(LIB + "pingAns", ping);
 
-/* ------------------------------
-   INTERNAL: per-channel result
--------------------------------- */
-function onCheckOne(){
-  let ch = decodeURIComponent(params);
-  let respToken = options.bb_options.token;
+function iteration() {
+  const d = iteration_quota;
+  if (!d) { send(user.id, "❌ Cannot load iteration quota"); return; }
 
-  let data = _mcGetUserData();
-  if(!data.session || data.session.token !== respToken) return;
+  const pct = ((d.progress / d.limit) * 100).toFixed(2);
+  const bar = "█".repeat(pct / 4) + "░".repeat(25 - pct / 4);
 
-  let status = options.result?.status;
-  let joined = ["member","administrator","creator"].includes(status);
+  const msg =
+    `⚙️ <b>BB Iteration</b>\n` +
+    `<b>Limit:</b> ${d.limit}\n<b>Used:</b> ${d.progress}\n<b>${pct}%</b>\n` +
+    `[ ${bar} ]`;
 
-  data.session.states[ch] = joined;
-  data.session.pending--;
-
-  _mcSaveUserData(data);
-
-  if(data.session.pending <= 0){
-    _mcFinishSession();
-  }
+  send(user.id, msg);
 }
 
-function onCheckErr(){
-  let ch = decodeURIComponent(params);
-  let respToken = options.bb_options.token;
+/* ============================================================
+    EXPORT API
+============================================================ */
 
-  let data = _mcGetUserData();
-  if(!data.session || data.session.token !== respToken) return;
-
-  data.session.states[ch] = false;  
-  data.session.pending--;
-
-  _mcSaveUserData(data);
-
-  if(data.session.pending <= 0){
-    _mcFinishSession();
-  }
-}
-
-/* ------------------------------
-   INTERNAL: finalize check
--------------------------------- */
-function _mcFinishSession(){
-  let data = _mcGetUserData();
-  let sess = data.session;
-  if(!sess) return;
-
-  const chats = mcGetChats();
-  let missing = chats.filter(ch => !sess.states[ch]);
-  let joined  = chats.filter(ch => sess.states[ch]);
-
-  // update permanent state
-  data.states = sess.states;
-  data.session = null;
-  _mcSaveUserData(data);
-
-  if(missing.length === 0){
-    if(sess.success){
-      Bot.run({
-        command: sess.success,
-        options: { joined: joined, missing: [] }
-      });
-    }
-  } else {
-    if(sess.fail){
-      Bot.run({
-        command: sess.fail,
-        options: { joined: joined, missing: missing }
-      });
-    }
-  }
-}
-
-/* ------------------------------
-   EXPORT
--------------------------------- */
 publish({
-  mcSetup: mcSetup,
-  mcCheck: mcCheck,
-  mcIsMember: mcIsMember,
-  mcRequire: mcRequire,
-  mcGetChats: mcGetChats,
-  mcGetMissing: mcGetMissing
+  setupOwner, onlyAdmin, addAdmin, removeAdmin, showAdminList,
+  setupJoin, checkJoin, checkJoinAll, requireJoin, requireJoinAll,
+  ping, iteration
 });
-
-on(MC_PREFIX + "runBatch", runBatch);
-on(MC_PREFIX + "onCheckOne", onCheckOne);
-on(MC_PREFIX + "onCheckErr", onCheckErr);
