@@ -1,189 +1,256 @@
 /*
- * UtilityLib v9 — Simple Membership Checker
- * -----------------------------------------
+ * UtilityLib v10 — FINAL SIMPLE MEMBERSHIP CHECKER
+ * ------------------------------------------------
  * Features:
- *  - Admin Panel: channels, successCallback, failCallback
- *  - Manual-only checking (mcCheck())
- *  - No delays, no batching, no background tasks
- *  - Sends joined[] and missing[] in options
+ *   - Admin Panel: channels, successCallback, failCallback
+ *   - Manual-only membership checking (mcCheck)
+ *   - isMember() for protecting commands
+ *   - Hybrid system:
+ *       * Uses user stored states for speed
+ *       * If no stored states → performs fresh check
+ *   - Passes { joined:[], missing:[], passed:{} } to callbacks
  */
 
-const MC_PANEL = "SimpleMembershipPanel_v9";
-const MC_PREFIX = "SMC9_";
+const PANEL = "SimpleMembershipPanel_v10";
+const PREFIX = "SMC10_";
+const STATE_KEY = PREFIX + "states";     // user-level memberships
+const SESSION_KEY = PREFIX + "session";  // temporary check session
 
-/* ------------------------------
-   1) ADMIN PANEL SETUP
--------------------------------- */
+/* ------------------------------------------------
+   1) Admin Panel Setup
+--------------------------------------------------*/
 function mcSetup() {
   AdminPanel.setPanel({
-    panel_name: MC_PANEL,
+    panel_name: PANEL,
     data: {
-      title: "Simple Membership Checker",
-      description: "Define channels and callback commands",
+      title: "Simple Membership Checker v10",
+      description: "Define channels and callback commands.",
       icon: "person-add",
       fields: [
         {
           name: "channels",
           title: "Channels to Check",
-          description: "Comma separated (ex: @c1, -10012345)",
+          description: "Comma separated (@c1, -100id)",
           type: "string",
-          placeholder: "@channel1, -1001234567890",
+          placeholder: "@channel1, -10012345",
           icon: "chatbubbles"
         },
         {
           name: "successCallback",
-          title: "Success Callback Command",
-          description: "When user joined ALL channels",
+          title: "Success Callback",
+          description: "Command when user joined all",
           type: "string",
-          placeholder: "/onAllJoined",
+          placeholder: "/menu",
           icon: "checkmark-circle"
         },
         {
           name: "failCallback",
-          title: "Fail Callback Command",
-          description: "When user missing ANY channel",
+          title: "Fail Callback",
+          description: "Command when user missing any channel",
           type: "string",
-          placeholder: "/onMissingJoin",
+          placeholder: "/start",
           icon: "close-circle"
         }
       ]
     }
   });
 
-  Bot.sendMessage("Simple Membership Checker Panel Installed ✔");
+  Bot.sendMessage("Membership Checker v10 Admin Panel Installed ✔");
 }
 
-/* ------------------------------
-   2) HELPERS
--------------------------------- */
-function _opts() {
-  return AdminPanel.getPanelValues(MC_PANEL) || {};
+/* ------------------------------------------------
+   2) Helpers
+--------------------------------------------------*/
+function _opt() {
+  return AdminPanel.getPanelValues(PANEL) || {};
 }
 
-function _normalizeList() {
-  const o = _opts();
+function mcGetChats() {
+  const o = _opt();
   if (!o.channels) return [];
-
-  return o.channels
-    .split(",")
-    .map(s => s.trim())
-    .filter(Boolean);
+  return o.channels.split(",").map(s => s.trim()).filter(Boolean);
 }
 
-/* ------------------------------
-   3) MAIN CHECK — mcCheck()
--------------------------------- */
-function mcCheck(passed_options) {
-  const channels = _normalizeList();
-  const opts = _opts();
+function _getStoredStates() {
+  return User.getProperty(STATE_KEY) || {};
+}
 
-  if (channels.length === 0) {
-    Bot.sendMessage("❌ No channels defined in Membership Panel");
+function _saveStoredStates(obj) {
+  User.setProperty(STATE_KEY, obj, "json");
+}
+
+/* ------------------------------------------------
+   3) public: mcGetMissing()
+--------------------------------------------------*/
+function mcGetMissing() {
+  const chats = mcGetChats();
+  const st = _getStoredStates();
+  return chats.filter(c => st[c] !== true);
+}
+
+/* ------------------------------------------------
+   4) public: isMember()
+      - fast check using stored states
+      - if no data stored → force mcCheck()
+--------------------------------------------------*/
+function isMember(customFail) {
+  const o = _opt();
+  const failCmd = customFail || o.failCallback;
+
+  const chats = mcGetChats();
+  if (chats.length === 0) {
+    Bot.sendMessage("❌ No channels set in Admin Panel.");
+    return false;
+  }
+
+  const st = _getStoredStates();
+
+  // if no stored states → force fresh check
+  if (Object.keys(st).length === 0) {
+    mcCheck();
+    return false; // callback will handle redirect
+  }
+
+  // If any missing → run failCallback
+  let missing = chats.filter(c => st[c] !== true);
+  if (missing.length > 0) {
+    if (failCmd) {
+      Bot.run({
+        command: failCmd,
+        options: { missing: missing, joined: [], forced: true }
+      });
+    }
+    return false;
+  }
+
+  return true; // all ok
+}
+
+/* ------------------------------------------------
+   5) mcCheck()
+--------------------------------------------------*/
+function mcCheck(passed) {
+  const chats = mcGetChats();
+  const o = _opt();
+
+  if (chats.length === 0) {
+    Bot.sendMessage("❌ No channels set for checking.");
     return;
   }
 
-  const token = MC_PREFIX + Date.now();
+  const token = PREFIX + "tk_" + Date.now();
 
-  User.setProperty(MC_PREFIX + "session", {
+  User.setProperty(SESSION_KEY, {
     token: token,
-    total: channels.length,
-    pending: channels.length,
+    total: chats.length,
+    pending: chats.length,
     results: {},
-    passed: passed_options
+    passed: passed
   }, "json");
 
-  channels.forEach(ch => {
+  chats.forEach(ch => {
     Api.getChatMember({
       chat_id: ch,
       user_id: user.telegramid,
-      on_result: MC_PREFIX + "onCheckOne " + encodeURIComponent(ch),
-      on_error: MC_PREFIX + "onCheckErr " + encodeURIComponent(ch),
+      on_result: PREFIX + "onOne " + encodeURIComponent(ch),
+      on_error: PREFIX + "onErr " + encodeURIComponent(ch),
       bb_options: { token: token }
     });
   });
 }
 
-/* ------------------------------
-   4) HANDLE SUCCESS RESULT
--------------------------------- */
-function onCheckOne() {
+/* ------------------------------------------------
+   6) Internal: Handle Success Response
+--------------------------------------------------*/
+function onOne() {
   let ch = decodeURIComponent(params);
 
-  let sess = User.getProperty(MC_PREFIX + "session");
+  let sess = User.getProperty(SESSION_KEY);
   if (!sess) return;
-  if (sess.token !== options.bb_options.token) return;
+
+  if (options.bb_options.token !== sess.token) return;
 
   let status = options.result?.status;
-  let ok = ["member", "administrator", "creator"].includes(status);
+  let joined = ["member","administrator","creator"].includes(status);
 
-  sess.results[ch] = ok;
+  sess.results[ch] = joined;
   sess.pending--;
-  User.setProperty(MC_PREFIX + "session", sess, "json");
+
+  User.setProperty(SESSION_KEY, sess, "json");
 
   if (sess.pending === 0) _finish();
 }
 
-/* ------------------------------
-   5) HANDLE ERROR RESULT
--------------------------------- */
-function onCheckErr() {
+/* ------------------------------------------------
+   7) Internal: Handle Error Response
+--------------------------------------------------*/
+function onErr() {
   let ch = decodeURIComponent(params);
 
-  let sess = User.getProperty(MC_PREFIX + "session");
+  let sess = User.getProperty(SESSION_KEY);
   if (!sess) return;
-  if (sess.token !== options.bb_options.token) return;
+
+  if (options.bb_options.token !== sess.token) return;
 
   sess.results[ch] = false;
   sess.pending--;
-  User.setProperty(MC_PREFIX + "session", sess, "json");
+
+  User.setProperty(SESSION_KEY, sess, "json");
 
   if (sess.pending === 0) _finish();
 }
 
-/* ------------------------------
-   6) FINAL RESOLUTION
--------------------------------- */
+/* ------------------------------------------------
+   8) Finish membership check
+--------------------------------------------------*/
 function _finish() {
-  let sess = User.getProperty(MC_PREFIX + "session");
+  let sess = User.getProperty(SESSION_KEY);
   if (!sess) return;
 
-  let opts = _opts();
-  let channels = _normalizeList();
+  let o = _opt();
+  let chats = mcGetChats();
 
   let missing = [];
   let joined = [];
 
-  channels.forEach(ch => {
-    if (sess.results[ch]) joined.push(ch);
+  chats.forEach(ch => {
+    if (sess.results[ch] === true) joined.push(ch);
     else missing.push(ch);
   });
 
-  User.setProperty(MC_PREFIX + "session", null);
+  // save permanent states
+  _saveStoredStates(sess.results);
+
+  // clear session
+  User.setProperty(SESSION_KEY, null);
 
   if (missing.length === 0) {
-    if (opts.successCallback) {
+    if (o.successCallback) {
       Bot.run({
-        command: opts.successCallback,
+        command: o.successCallback,
         options: { joined: joined, missing: [], passed: sess.passed }
       });
     }
   } else {
-    if (opts.failCallback) {
+    if (o.failCallback) {
       Bot.run({
-        command: opts.failCallback,
+        command: o.failCallback,
         options: { joined: joined, missing: missing, passed: sess.passed }
       });
     }
   }
 }
 
-/* ------------------------------
-   EXPORT API
--------------------------------- */
+/* ------------------------------------------------
+   Export
+--------------------------------------------------*/
 publish({
   mcSetup: mcSetup,
-  mcCheck: mcCheck
+  mcCheck: mcCheck,
+  isMember: isMember,
+  mcGetChats: mcGetChats,
+  mcGetMissing: mcGetMissing
 });
 
-on(MC_PREFIX + "onCheckOne", onCheckOne);
-on(MC_PREFIX + "onCheckErr", onCheckErr);
+on(PREFIX + "onOne", onOne);
+on(PREFIX + "onErr", onErr);
