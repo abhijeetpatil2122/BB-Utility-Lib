@@ -1,213 +1,189 @@
 /*
- * UtilityMC — Minimal Membership Checker Library (updated)
- * - Dev builds their own UI
- * - checkJoin triggers callbacks with useful options
+ * UtilityLib v9 — Simple Membership Checker
+ * -----------------------------------------
+ * Features:
+ *  - Admin Panel: channels, successCallback, failCallback
+ *  - Manual-only checking (mcCheck())
+ *  - No delays, no batching, no background tasks
+ *  - Sends joined[] and missing[] in options
  */
 
-const MC_PREFIX = "UtilityMC_";
-const MC_PANEL  = MC_PREFIX + "panel";
+const MC_PANEL = "SimpleMembershipPanel_v9";
+const MC_PREFIX = "SMC9_";
 
-/* -------------------------
-   Admin panel setup
-   ------------------------- */
-function setupMC() {
-  const panel = {
-    title: "Membership Checker",
-    description: "Set channels & callback commands for membership checks",
-    icon: "person-add",
-    fields: [
-      { name: "channels", type: "string", title: "Channels", placeholder: "@chan1, -1001234", icon: "chatbubbles" },
-      { name: "onJoined", type: "string", title: "Callback: On Joined (ANY)", placeholder: "/onJoined", icon: "checkmark" },
-      { name: "onNotJoined", type: "string", title: "Callback: On Missing (ANY)", placeholder: "/onNotJoined", icon: "warning" },
-      { name: "onAllJoined", type: "string", title: "Callback: On All Joined", placeholder: "/onAllJoined", icon: "happy" },
-      { name: "onError", type: "string", title: "Callback: On Error", placeholder: "/onError", icon: "bug" }
-    ]
-  };
+/* ------------------------------
+   1) ADMIN PANEL SETUP
+-------------------------------- */
+function mcSetup() {
+  AdminPanel.setPanel({
+    panel_name: MC_PANEL,
+    data: {
+      title: "Simple Membership Checker",
+      description: "Define channels and callback commands",
+      icon: "person-add",
+      fields: [
+        {
+          name: "channels",
+          title: "Channels to Check",
+          description: "Comma separated (ex: @c1, -10012345)",
+          type: "string",
+          placeholder: "@channel1, -1001234567890",
+          icon: "chatbubbles"
+        },
+        {
+          name: "successCallback",
+          title: "Success Callback Command",
+          description: "When user joined ALL channels",
+          type: "string",
+          placeholder: "/onAllJoined",
+          icon: "checkmark-circle"
+        },
+        {
+          name: "failCallback",
+          title: "Fail Callback Command",
+          description: "When user missing ANY channel",
+          type: "string",
+          placeholder: "/onMissingJoin",
+          icon: "close-circle"
+        }
+      ]
+    }
+  });
 
-  AdminPanel.setPanel({ panel_name: MC_PANEL, data: panel });
-  Bot.sendMessage("✅ Membership Checker panel installed.");
+  Bot.sendMessage("Simple Membership Checker Panel Installed ✔");
 }
 
-function getSettings() {
+/* ------------------------------
+   2) HELPERS
+-------------------------------- */
+function _opts() {
   return AdminPanel.getPanelValues(MC_PANEL) || {};
 }
 
-function normalizeChannel(ch) {
-  if (!ch && ch !== 0) return null;
-  ch = String(ch).trim();
-  if (ch === "") return null;
-  // accept @username or -100... IDs or plain numeric (best-effort)
-  return ch;
+function _normalizeList() {
+  const o = _opts();
+  if (!o.channels) return [];
+
+  return o.channels
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean);
 }
 
-/* -------------------------
-   Helper: get channels array from panel
-   (dev may ignore this and build UI themselves)
-   ------------------------- */
-function getChannelListFromPanel() {
-  const s = getSettings();
-  if (!s.channels) return [];
-  return s.channels.split(",").map(c => normalizeChannel(c.trim())).filter(Boolean);
-}
+/* ------------------------------
+   3) MAIN CHECK — mcCheck()
+-------------------------------- */
+function mcCheck(passed_options) {
+  const channels = _normalizeList();
+  const opts = _opts();
 
-/* -------------------------
-   checkJoin() — dispatch checks for panel channels
-   Developer can call this or use checkJoinSingle(channel) for custom flows
-   ------------------------- */
-function checkJoin() {
-  const channels = getChannelListFromPanel();
-  if (!channels || channels.length === 0) {
-    Bot.sendMessage("⚠️ No channels configured in Admin Panel.");
-    return false;
+  if (channels.length === 0) {
+    Bot.sendMessage("❌ No channels defined in Membership Panel");
+    return;
   }
 
-  const runId = MC_PREFIX + "run_" + Date.now() + "_" + Math.floor(Math.random()*9999);
-  const state = { total: channels.length, done: 0, results: {}, runId: runId, settings: getSettings() };
+  const token = MC_PREFIX + Date.now();
 
-  // store run state
-  User.setProperty(runId, state, "json");
+  User.setProperty(MC_PREFIX + "session", {
+    token: token,
+    total: channels.length,
+    pending: channels.length,
+    results: {},
+    passed: passed_options
+  }, "json");
 
   channels.forEach(ch => {
-    const encoded = encodeURIComponent(ch);
     Api.getChatMember({
       chat_id: ch,
       user_id: user.telegramid,
-      on_result: MC_PREFIX + "onRes " + runId + " " + encoded,
-      on_error:  MC_PREFIX + "onErr " + runId + " " + encoded
+      on_result: MC_PREFIX + "onCheckOne " + encodeURIComponent(ch),
+      on_error: MC_PREFIX + "onCheckErr " + encodeURIComponent(ch),
+      bb_options: { token: token }
     });
   });
-
-  return true;
 }
 
-/* -------------------------
-   checkJoinSingle(channel) — allow dev to call check for a single channel
-   Useful if dev provides custom list or button per channel
-   ------------------------- */
-function checkJoinSingle(rawChannel) {
-  const channel = normalizeChannel(rawChannel);
-  if (!channel) {
-    Bot.sendMessage("⚠️ Invalid channel.");
-    return false;
-  }
-  const runId = MC_PREFIX + "run_single_" + Date.now() + "_" + Math.floor(Math.random()*9999);
-  const state = { total: 1, done: 0, results: {}, runId: runId, settings: getSettings() };
-  User.setProperty(runId, state, "json");
+/* ------------------------------
+   4) HANDLE SUCCESS RESULT
+-------------------------------- */
+function onCheckOne() {
+  let ch = decodeURIComponent(params);
 
-  const encoded = encodeURIComponent(channel);
-  Api.getChatMember({
-    chat_id: channel,
-    user_id: user.telegramid,
-    on_result: MC_PREFIX + "onRes " + runId + " " + encoded,
-    on_error:  MC_PREFIX + "onErr " + runId + " " + encoded
+  let sess = User.getProperty(MC_PREFIX + "session");
+  if (!sess) return;
+  if (sess.token !== options.bb_options.token) return;
+
+  let status = options.result?.status;
+  let ok = ["member", "administrator", "creator"].includes(status);
+
+  sess.results[ch] = ok;
+  sess.pending--;
+  User.setProperty(MC_PREFIX + "session", sess, "json");
+
+  if (sess.pending === 0) _finish();
+}
+
+/* ------------------------------
+   5) HANDLE ERROR RESULT
+-------------------------------- */
+function onCheckErr() {
+  let ch = decodeURIComponent(params);
+
+  let sess = User.getProperty(MC_PREFIX + "session");
+  if (!sess) return;
+  if (sess.token !== options.bb_options.token) return;
+
+  sess.results[ch] = false;
+  sess.pending--;
+  User.setProperty(MC_PREFIX + "session", sess, "json");
+
+  if (sess.pending === 0) _finish();
+}
+
+/* ------------------------------
+   6) FINAL RESOLUTION
+-------------------------------- */
+function _finish() {
+  let sess = User.getProperty(MC_PREFIX + "session");
+  if (!sess) return;
+
+  let opts = _opts();
+  let channels = _normalizeList();
+
+  let missing = [];
+  let joined = [];
+
+  channels.forEach(ch => {
+    if (sess.results[ch]) joined.push(ch);
+    else missing.push(ch);
   });
 
-  return true;
-}
+  User.setProperty(MC_PREFIX + "session", null);
 
-/* -------------------------
-   HANDLERS for getChatMember results
-   (they accumulate results then finalize)
-   ------------------------- */
-function onResHandler() {
-  // params: "<runId> <encodedChannel>"
-  const parts = params.split(" ");
-  const runId = parts[0];
-  const channel = decodeURIComponent(parts.slice(1).join(" "));
-
-  try {
-    const result = options.result || options;
-    // Telegram shape may be result or result.result — we check both
-    const status = result.status || (result.result && result.result.status) || null;
-    const ok = ["member", "administrator", "creator"].includes(status);
-
-    let state = User.getProperty(runId) || null;
-    if (!state) state = { total: 1, done: 0, results: {}, runId: runId, settings: getSettings() };
-
-    state.results[channel] = { ok: !!ok, status: status, raw: result };
-    state.done = Object.keys(state.results).length;
-    User.setProperty(runId, state, "json");
-
-    // finalize if done
-    if (state.done >= state.total) finalizeRun(runId, state);
-  } catch (e) {
-    // On handler error -> call onError callback if configured
-    const s = getSettings();
-    if (s.onError) Bot.run({ command: s.onError, options: { runId: runId, channel: channel, error: String(e), raw: options } });
-    // still store that channel as not ok
-    let state = User.getProperty(runId) || { total:1, done:0, results:{}, runId: runId, settings: getSettings() };
-    state.results[channel] = { ok: false, error: String(e) };
-    state.done = Object.keys(state.results).length;
-    User.setProperty(runId, state, "json");
-    if (state.done >= state.total) finalizeRun(runId, state);
-  }
-}
-on(MC_PREFIX + "onRes", onResHandler);
-
-function onErrHandler() {
-  const parts = params.split(" ");
-  const runId = parts[0];
-  const channel = decodeURIComponent(parts.slice(1).join(" "));
-
-  const s = getSettings();
-
-  let state = User.getProperty(runId) || { total:1, done:0, results:{}, runId: runId, settings: getSettings() };
-  state.results[channel] = { ok: false, error: options || "error" };
-  state.done = Object.keys(state.results).length;
-  User.setProperty(runId, state, "json");
-
-  // call onError callback (if set)
-  if (s.onError) {
-    Bot.run({ command: s.onError, options: { runId: runId, channel: channel, error: options } });
-  }
-
-  if (state.done >= state.total) finalizeRun(runId, state);
-}
-on(MC_PREFIX + "onErr", onErrHandler);
-
-/* -------------------------
-   finalizeRun: call developer callbacks with OPTIONS
-   options object will include:
-     - runId
-     - results: { channel: { ok: boolean, status?, raw?, error? }, ... }
-     - settings: admin panel values
-   ------------------------- */
-function finalizeRun(runId, state) {
-  if (!state) state = User.getProperty(runId) || null;
-  if (!state) return;
-
-  const s = state.settings || getSettings();
-  const results = state.results || {};
-  const allOk = Object.values(results).length > 0 && Object.values(results).every(r => r.ok === true);
-  const anyJoined = Object.values(results).some(r => r.ok === true);
-
-  const cbOptions = { runId: runId, results: results, settings: s };
-
-  if (allOk) {
-    if (s.onAllJoined) Bot.run({ command: s.onAllJoined, options: cbOptions });
+  if (missing.length === 0) {
+    if (opts.successCallback) {
+      Bot.run({
+        command: opts.successCallback,
+        options: { joined: joined, missing: [], passed: sess.passed }
+      });
+    }
   } else {
-    if (!anyJoined) {
-      if (s.onNotJoined) Bot.run({ command: s.onNotJoined, options: cbOptions });
-    } else {
-      // some joined, some missing
-      if (s.onJoined) Bot.run({ command: s.onJoined, options: cbOptions });
+    if (opts.failCallback) {
+      Bot.run({
+        command: opts.failCallback,
+        options: { joined: joined, missing: missing, passed: sess.passed }
+      });
     }
   }
-
-  // cleanup temporary prop
-  User.setProperty(runId, null);
 }
 
-/* -------------------------
-   Export
-   ------------------------- */
+/* ------------------------------
+   EXPORT API
+-------------------------------- */
 publish({
-  setupMC: setupMC,
-  checkJoin: checkJoin,
-  checkJoinSingle: checkJoinSingle,
-  requireJoin: function(){ 
-    // boolean convenience function based on latest per-channel cache (optional)
-    // Not implemented robustly here — dev should use checkJoin & callbacks ideally.
-    return false;
-  }
+  mcSetup: mcSetup,
+  mcCheck: mcCheck
 });
+
+on(MC_PREFIX + "onCheckOne", onCheckOne);
+on(MC_PREFIX + "onCheckErr", onCheckErr);
