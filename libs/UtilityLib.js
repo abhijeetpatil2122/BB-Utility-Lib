@@ -1,297 +1,213 @@
-/*  
- * UtilityLib v10 — FINAL PRODUCTION VERSION
- * ------------------------------------------
- * Features:
- *  - Admin system (Owner + Admins)
- *  - Ping
- *  - Iteration
- *  - Membership Checker (MCL Lite):
- *      · Admin Panel setup
- *      · checkJoin(channel)
- *      · checkJoinAll(channels)
- *      · requireJoin(channel)
- *      · requireJoinAll(channels)
- *      · Callbacks stored in Admin Panel
- *
+/*
+ * UtilityMC — Minimal Membership Checker Library (updated)
+ * - Dev builds their own UI
+ * - checkJoin triggers callbacks with useful options
  */
 
-const LIB = "UtilityLib_";
+const MC_PREFIX = "UtilityMC_";
+const MC_PANEL  = MC_PREFIX + "panel";
 
-// Keys for internal storage
-const OWNER_KEY  = LIB + "owner";
-const ADMINS_KEY = LIB + "admins";
-const MEM_PANEL  = LIB + "join_panel";
-const MEM_CACHE  = LIB + "join_cache_";
-
-/* ============================================================
-    GENERAL HELPERS
-============================================================ */
-
-function send(to, text, parse = "HTML") {
-  Api.sendMessage({ chat_id: to, text, parse_mode: parse });
-}
-
-function normalizeChannel(ch) {
-  ch = String(ch).trim();
-  if (ch.startsWith("@")) return ch;
-  if (/^-100\d{10,}$/.test(ch)) return ch; // private channel ID
-  return ch;
-}
-
-function isJoined(status) {
-  return ["member", "administrator", "creator"].includes(status);
-}
-
-/* ============================================================
-    ADMIN SYSTEM (same as your current system)
-============================================================ */
-
-function getOwner() { return Bot.getProperty(OWNER_KEY); }
-function getAdmins() { return Bot.getProperty(ADMINS_KEY) || []; }
-function setAdmins(arr) { Bot.setProperty(ADMINS_KEY, arr, "json"); }
-
-function setupOwner() {
-  if (getOwner()) {
-    send(user.id, "ℹ️ <b>Owner already set:</b> <code>" + getOwner() + "</code>");
-    return;
-  }
-
-  Bot.setProperty(OWNER_KEY, user.id, "integer");
-  Bot.setProperty(ADMINS_KEY, [user.id], "json");
-
-  send(user.id, "🎉 <b>Owner setup complete!</b>\nYou are Owner and Admin.");
-}
-
-function onlyAdmin() {
-  let owner = getOwner();
-  if (!owner) {
-    send(user.id, "⚠️ Run <code>Libs.UtilityLib.setupOwner()</code> first.");
-    return false;
-  }
-
-  if (!getAdmins().includes(user.id)) {
-    send(user.id, "❌ <b>You are not admin.</b>");
-    return false;
-  }
-  return true;
-}
-
-function addAdmin(id) {
-  if (!onlyAdmin()) return;
-  id = Number(id);
-
-  let list = getAdmins();
-  if (!list.includes(id)) {
-    list.push(id);
-    setAdmins(list);
-    send(user.id, "✅ Added admin: <code>" + id + "</code>");
-  }
-}
-
-function removeAdmin(id) {
-  if (!onlyAdmin()) return;
-  id = Number(id);
-
-  let owner = getOwner();
-  if (id === owner) {
-    send(user.id, "⚠️ Cannot remove Owner.");
-    return;
-  }
-
-  let list = getAdmins().filter(a => a !== id);
-  setAdmins(list);
-  send(user.id, "🗑 Removed admin: <code>" + id + "</code>");
-}
-
-function showAdminList() {
-  let owner = getOwner();
-  let admins = getAdmins();
-  let msg = "👮 <b>Admins List</b>\n\n";
-
-  admins.forEach((id, i) => {
-    let role = (id === owner) ? " (Owner)" : "";
-    msg += `${i + 1}. <code>${id}</code>${role}\n`;
-  });
-
-  send(user.id, msg);
-}
-
-/* ============================================================
-    MEMBERSHIP CHECK — ADMIN PANEL SETUP
-============================================================ */
-
-function setupJoin() {
+/* -------------------------
+   Admin panel setup
+   ------------------------- */
+function setupMC() {
   const panel = {
     title: "Membership Checker",
-    description: "Configure channels & callback commands.",
+    description: "Set channels & callback commands for membership checks",
     icon: "person-add",
-
     fields: [
-      { name: "channels", title: "Channels", type: "string", placeholder: "@chan1, -100123456" },
-      { name: "cmd_joined", title: "onJoined", type: "string", placeholder: "/onJoined" },
-      { name: "cmd_missing", title: "onNotJoined", type: "string", placeholder: "/onNotJoined" },
-      { name: "cmd_all", title: "onAllJoined", type: "string", placeholder: "/onAllJoined" },
-      { name: "cmd_error", title: "onError", type: "string", placeholder: "/onError" }
+      { name: "channels", type: "string", title: "Channels", placeholder: "@chan1, -1001234", icon: "chatbubbles" },
+      { name: "onJoined", type: "string", title: "Callback: On Joined (ANY)", placeholder: "/onJoined", icon: "checkmark" },
+      { name: "onNotJoined", type: "string", title: "Callback: On Missing (ANY)", placeholder: "/onNotJoined", icon: "warning" },
+      { name: "onAllJoined", type: "string", title: "Callback: On All Joined", placeholder: "/onAllJoined", icon: "happy" },
+      { name: "onError", type: "string", title: "Callback: On Error", placeholder: "/onError", icon: "bug" }
     ]
   };
 
-  AdminPanel.setPanel({ panel_name: MEM_PANEL, data: panel });
-  send(user.id, "🛠 Membership Checker Panel Installed.\nGo to: Bot → Admin Panels");
+  AdminPanel.setPanel({ panel_name: MC_PANEL, data: panel });
+  Bot.sendMessage("✅ Membership Checker panel installed.");
 }
 
-function getJoinSettings() {
-  return AdminPanel.getPanelValues(MEM_PANEL) || {};
+function getSettings() {
+  return AdminPanel.getPanelValues(MC_PANEL) || {};
 }
 
-/* ============================================================
-    MEMBERSHIP CHECK CORE
-============================================================ */
-
-function getUserCache() {
-  return User.getProperty(MEM_CACHE + user.id) || {};
+function normalizeChannel(ch) {
+  if (!ch && ch !== 0) return null;
+  ch = String(ch).trim();
+  if (ch === "") return null;
+  // accept @username or -100... IDs or plain numeric (best-effort)
+  return ch;
 }
 
-function setUserCache(obj) {
-  User.setProperty(MEM_CACHE + user.id, obj, "json");
+/* -------------------------
+   Helper: get channels array from panel
+   (dev may ignore this and build UI themselves)
+   ------------------------- */
+function getChannelListFromPanel() {
+  const s = getSettings();
+  if (!s.channels) return [];
+  return s.channels.split(",").map(c => normalizeChannel(c.trim())).filter(Boolean);
 }
 
-function cacheSave(channel, ok) {
-  let cache = getUserCache();
-  cache[channel] = { ok, ts: Date.now() };
-  setUserCache(cache);
-}
-
-function checkJoin(channel) {
-  channel = normalizeChannel(channel);
-  Api.getChatMember({
-    chat_id: channel,
-    user_id: user.id,
-    on_result: LIB + "onCheckOne " + encodeURIComponent(channel),
-    on_error: LIB + "onCheckErr " + encodeURIComponent(channel)
-  });
-}
-
-function onCheckOne() {
-  const channel = decodeURIComponent(params.split(" ")[0]);
-  const settings = getJoinSettings();
-  const res = options.result;
-  const status = res.status || res.result?.status;
-  const ok = isJoined(status);
-
-  cacheSave(channel, ok);
-
-  if (ok && settings.cmd_joined) Bot.run({ command: settings.cmd_joined, options: { channel } });
-  else if (!ok && settings.cmd_missing) Bot.run({ command: settings.cmd_missing, options: { channel } });
-}
-on(LIB + "onCheckOne", onCheckOne);
-
-function onCheckErr() {
-  const channel = decodeURIComponent(params.split(" ")[0]);
-  const settings = getJoinSettings();
-  cacheSave(channel, false);
-
-  if (settings.cmd_error)
-    Bot.run({ command: settings.cmd_error, options: { channel, error: options } });
-}
-on(LIB + "onCheckErr", onCheckErr);
-
-/* ============================================================
-    MULTI-CHANNEL CHECK
-============================================================ */
-
-function getChannelList() {
-  let settings = getJoinSettings();
-  if (!settings.channels) return [];
-  return settings.channels.split(",").map(a => normalizeChannel(a.trim()));
-}
-
-function checkJoinAll() {
-  let arr = getChannelList();
-  if (!arr.length) return;
-
-  arr.forEach(ch => checkJoin(ch));
-
-  // If developer wants: they can detect "all joined" later via requireJoinAll()
-}
-
-/* ============================================================
-    REQUIRE JOIN (Cached)
-============================================================ */
-
-function requireJoin(channel) {
-  channel = normalizeChannel(channel);
-  let cache = getUserCache()[channel];
-
-  if (cache) return cache.ok;
-
-  checkJoin(channel);
-  return false;
-}
-
-function requireJoinAll() {
-  let arr = getChannelList();
-  let cache = getUserCache();
-
-  let missing = [];
-  arr.forEach(ch => {
-    if (!cache[ch]) missing.push(ch);
-    else if (!cache[ch].ok) missing.push(ch);
-  });
-
-  if (missing.length) {
-    missing.forEach(ch => checkJoin(ch));
+/* -------------------------
+   checkJoin() — dispatch checks for panel channels
+   Developer can call this or use checkJoinSingle(channel) for custom flows
+   ------------------------- */
+function checkJoin() {
+  const channels = getChannelListFromPanel();
+  if (!channels || channels.length === 0) {
+    Bot.sendMessage("⚠️ No channels configured in Admin Panel.");
     return false;
   }
+
+  const runId = MC_PREFIX + "run_" + Date.now() + "_" + Math.floor(Math.random()*9999);
+  const state = { total: channels.length, done: 0, results: {}, runId: runId, settings: getSettings() };
+
+  // store run state
+  User.setProperty(runId, state, "json");
+
+  channels.forEach(ch => {
+    const encoded = encodeURIComponent(ch);
+    Api.getChatMember({
+      chat_id: ch,
+      user_id: user.telegramid,
+      on_result: MC_PREFIX + "onRes " + runId + " " + encoded,
+      on_error:  MC_PREFIX + "onErr " + runId + " " + encoded
+    });
+  });
+
   return true;
 }
 
-/* ============================================================
-    PING + ITERATION (unchanged)
-============================================================ */
+/* -------------------------
+   checkJoinSingle(channel) — allow dev to call check for a single channel
+   Useful if dev provides custom list or button per channel
+   ------------------------- */
+function checkJoinSingle(rawChannel) {
+  const channel = normalizeChannel(rawChannel);
+  if (!channel) {
+    Bot.sendMessage("⚠️ Invalid channel.");
+    return false;
+  }
+  const runId = MC_PREFIX + "run_single_" + Date.now() + "_" + Math.floor(Math.random()*9999);
+  const state = { total: 1, done: 0, results: {}, runId: runId, settings: getSettings() };
+  User.setProperty(runId, state, "json");
 
-function ping() {
-  if (options?.result) {
-    let ms = Date.now() - options.bb_options.start;
-    Api.editMessageText({
-      chat_id: options.result.chat.id,
-      message_id: options.result.message_id,
-      text: `🏓 <b>${ms} ms</b>`,
-      parse_mode: "HTML"
-    });
-    return;
+  const encoded = encodeURIComponent(channel);
+  Api.getChatMember({
+    chat_id: channel,
+    user_id: user.telegramid,
+    on_result: MC_PREFIX + "onRes " + runId + " " + encoded,
+    on_error:  MC_PREFIX + "onErr " + runId + " " + encoded
+  });
+
+  return true;
+}
+
+/* -------------------------
+   HANDLERS for getChatMember results
+   (they accumulate results then finalize)
+   ------------------------- */
+function onResHandler() {
+  // params: "<runId> <encodedChannel>"
+  const parts = params.split(" ");
+  const runId = parts[0];
+  const channel = decodeURIComponent(parts.slice(1).join(" "));
+
+  try {
+    const result = options.result || options;
+    // Telegram shape may be result or result.result — we check both
+    const status = result.status || (result.result && result.result.status) || null;
+    const ok = ["member", "administrator", "creator"].includes(status);
+
+    let state = User.getProperty(runId) || null;
+    if (!state) state = { total: 1, done: 0, results: {}, runId: runId, settings: getSettings() };
+
+    state.results[channel] = { ok: !!ok, status: status, raw: result };
+    state.done = Object.keys(state.results).length;
+    User.setProperty(runId, state, "json");
+
+    // finalize if done
+    if (state.done >= state.total) finalizeRun(runId, state);
+  } catch (e) {
+    // On handler error -> call onError callback if configured
+    const s = getSettings();
+    if (s.onError) Bot.run({ command: s.onError, options: { runId: runId, channel: channel, error: String(e), raw: options } });
+    // still store that channel as not ok
+    let state = User.getProperty(runId) || { total:1, done:0, results:{}, runId: runId, settings: getSettings() };
+    state.results[channel] = { ok: false, error: String(e) };
+    state.done = Object.keys(state.results).length;
+    User.setProperty(runId, state, "json");
+    if (state.done >= state.total) finalizeRun(runId, state);
+  }
+}
+on(MC_PREFIX + "onRes", onResHandler);
+
+function onErrHandler() {
+  const parts = params.split(" ");
+  const runId = parts[0];
+  const channel = decodeURIComponent(parts.slice(1).join(" "));
+
+  const s = getSettings();
+
+  let state = User.getProperty(runId) || { total:1, done:0, results:{}, runId: runId, settings: getSettings() };
+  state.results[channel] = { ok: false, error: options || "error" };
+  state.done = Object.keys(state.results).length;
+  User.setProperty(runId, state, "json");
+
+  // call onError callback (if set)
+  if (s.onError) {
+    Bot.run({ command: s.onError, options: { runId: runId, channel: channel, error: options } });
   }
 
-  Api.sendMessage({
-    chat_id: user.id,
-    text: "<b>Ping…</b>",
-    parse_mode: "HTML",
-    bb_options: { start: Date.now() },
-    on_result: LIB + "pingAns"
-  });
+  if (state.done >= state.total) finalizeRun(runId, state);
 }
-on(LIB + "pingAns", ping);
+on(MC_PREFIX + "onErr", onErrHandler);
 
-function iteration() {
-  const d = iteration_quota;
-  if (!d) { send(user.id, "❌ Cannot load iteration quota"); return; }
+/* -------------------------
+   finalizeRun: call developer callbacks with OPTIONS
+   options object will include:
+     - runId
+     - results: { channel: { ok: boolean, status?, raw?, error? }, ... }
+     - settings: admin panel values
+   ------------------------- */
+function finalizeRun(runId, state) {
+  if (!state) state = User.getProperty(runId) || null;
+  if (!state) return;
 
-  const pct = ((d.progress / d.limit) * 100).toFixed(2);
-  const bar = "█".repeat(pct / 4) + "░".repeat(25 - pct / 4);
+  const s = state.settings || getSettings();
+  const results = state.results || {};
+  const allOk = Object.values(results).length > 0 && Object.values(results).every(r => r.ok === true);
+  const anyJoined = Object.values(results).some(r => r.ok === true);
 
-  const msg =
-    `⚙️ <b>BB Iteration</b>\n` +
-    `<b>Limit:</b> ${d.limit}\n<b>Used:</b> ${d.progress}\n<b>${pct}%</b>\n` +
-    `[ ${bar} ]`;
+  const cbOptions = { runId: runId, results: results, settings: s };
 
-  send(user.id, msg);
+  if (allOk) {
+    if (s.onAllJoined) Bot.run({ command: s.onAllJoined, options: cbOptions });
+  } else {
+    if (!anyJoined) {
+      if (s.onNotJoined) Bot.run({ command: s.onNotJoined, options: cbOptions });
+    } else {
+      // some joined, some missing
+      if (s.onJoined) Bot.run({ command: s.onJoined, options: cbOptions });
+    }
+  }
+
+  // cleanup temporary prop
+  User.setProperty(runId, null);
 }
 
-/* ============================================================
-    EXPORT API
-============================================================ */
-
+/* -------------------------
+   Export
+   ------------------------- */
 publish({
-  setupOwner, onlyAdmin, addAdmin, removeAdmin, showAdminList,
-  setupJoin, checkJoin, checkJoinAll, requireJoin, requireJoinAll,
-  ping, iteration
+  setupMC: setupMC,
+  checkJoin: checkJoin,
+  checkJoinSingle: checkJoinSingle,
+  requireJoin: function(){ 
+    // boolean convenience function based on latest per-channel cache (optional)
+    // Not implemented robustly here — dev should use checkJoin & callbacks ideally.
+    return false;
+  }
 });
