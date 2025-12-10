@@ -1,158 +1,101 @@
 /*
- * UtilityLib v11 — Simple + Fast Membership Checker (final)
+ * UtilityLib v12 — Stable Membership Checker (final)
  *
- * Admin Panel fields:
- *  - publicChannels   (comma separated usernames, e.g. @ParadoxBackup, @Other)
- *  - privateChannels  (comma separated id=link pairs, e.g. -1001954742543=https://t.me/+Invite)
- *  - successCallback  (command when user joined all)
- *  - failCallback     (command when user missing any)
- *  - batchDelay       (seconds, used when channels > 2)
+ * Admin Panel:
+ *  - publicChannels    (comma-separated usernames)
+ *  - privateChannels   (comma-separated id=link pairs)
+ *  - successCallback
+ *  - failCallback
+ *  - batchDelay (seconds)
  *
- * Public API:
+ * API:
  *  - mcSetup()
  *  - mcCheck(passed_options)
- *  - isMember(customFail)   // use like: if (!Libs.UtilityLib.isMember()) return;
+ *  - isMember(customFail)
  *  - mcGetChats()
- *  - mcGetMissing()         // uses stored states (fast)
+ *  - mcGetMissing()
  *
  * Notes:
- *  - Max channels = 10
- *  - Batch size = 2 (safe for BB)
- *  - Manual-only: developer triggers mcCheck(); lib performs checks and calls callbacks
+ *  - Max 10 channels
+ *  - Batch size 2 for safety
+ *  - Uses JSON-encoded params for batch Bot.run (safe)
  */
 
-const MC_PANEL_NAME = "SimpleMembershipPanel_v11";
-const MC_PREFIX = "SMC11_";
-const STATE_PROP = MC_PREFIX + "states";
-const SESSION_PROP = MC_PREFIX + "session";
-const MAX_CH = 10;
+const MC_PANEL = "SimpleMembershipPanel_v12";
+const PREFIX = "SMC12_";
+const STATE_KEY = PREFIX + "states";
+const SESSION_KEY = PREFIX + "session";
+const MAX_CHANNELS = 10;
 const BATCH_SIZE = 2;
 
-/* ---------------------------
-   Admin panel setup
-----------------------------*/
+/* --------------------- Admin panel --------------------- */
 function mcSetup() {
   const panel = {
-    title: "Membership Checker v11 (Simple)",
-    description: "Public and Private channels mapping + callbacks",
+    title: "Membership Checker v12",
+    description: "Public (usernames) + Private (id=link) channels + callbacks",
     icon: "person-add",
     fields: [
-      {
-        name: "publicChannels",
-        title: "Public Channels (usernames)",
-        description: "Comma separated usernames (e.g. @ParadoxBackup, @AnotherChannel)",
-        type: "string",
-        placeholder: "@ParadoxBackup, @Another",
-        icon: "globe"
-      },
-      {
-        name: "privateChannels",
-        title: "Private Channels (id=link)",
-        description: "Comma separated id=invite pairs (e.g. -1001954742543=https://t.me/+Invite)",
-        type: "string",
-        placeholder: "-1001954742543=https://t.me/+Invite, -1002223334445=https://t.me/+Invite2",
-        icon: "lock-closed"
-      },
-      {
-        name: "successCallback",
-        title: "Success Callback",
-        description: "Command to run when user joined all channels",
-        type: "string",
-        placeholder: "/menu",
-        icon: "checkmark-circle"
-      },
-      {
-        name: "failCallback",
-        title: "Fail Callback",
-        description: "Command to run when user missing any channel",
-        type: "string",
-        placeholder: "/start",
-        icon: "close-circle"
-      },
-      {
-        name: "batchDelay",
-        title: "Batch delay (seconds)",
-        description: "Used only when channels > 2. Recommended 1 second",
-        type: "integer",
-        placeholder: "1",
-        value: 1,
-        icon: "timer"
-      }
+      { name: "publicChannels", title: "Public Channels (usernames)", description: "Comma separated, e.g. @ParadoxBackup", type: "string", placeholder: "@ParadoxBackup, @Another", icon: "globe" },
+      { name: "privateChannels", title: "Private Channels (id=link)", description: "Comma separated id=link pairs, e.g. -1001954742543=https://t.me/+Invite", type: "string", placeholder: "-1001954742543=https://t.me/+Invite", icon: "lock-closed" },
+      { name: "successCallback", title: "Success Callback", description: "Command when user joined all", type: "string", placeholder: "/menu", icon: "checkmark-circle" },
+      { name: "failCallback", title: "Fail Callback", description: "Command when user missing any", type: "string", placeholder: "/start", icon: "close-circle" },
+      { name: "batchDelay", title: "Batch delay (seconds)", description: "Used only when channels > 2", type: "integer", placeholder: "1", value: 1, icon: "timer" }
     ]
   };
 
-  AdminPanel.setPanel({
-    panel_name: MC_PANEL_NAME,
-    data: panel
-  });
-
-  Bot.sendMessage("Membership Checker v11 admin panel created.");
+  AdminPanel.setPanel({ panel_name: MC_PANEL, data: panel });
+  Bot.sendMessage("Membership Checker v12: Admin panel created.");
 }
 
-/* ---------------------------
-   Admin options helpers
-----------------------------*/
-function _getPanel() {
-  return AdminPanel.getPanelValues(MC_PANEL_NAME) || {};
-}
+/* --------------------- Helpers --------------------- */
+function _panel() { return AdminPanel.getPanelValues(MC_PANEL) || {}; }
 
-/* parse public channels field -> array like ["@ParadoxBackup"] */
 function _parsePublic() {
-  const p = _getPanel();
+  const p = _panel();
   if(!p.publicChannels) return [];
-  return p.publicChannels.split(",").map(s => s.trim()).filter(Boolean).slice(0, MAX_CH);
+  return p.publicChannels.split(",").map(s => s.trim()).filter(Boolean).slice(0, MAX_CHANNELS);
 }
 
-/* parse private channels field -> map id -> link (link may be empty) */
 function _parsePrivateMap() {
-  const p = _getPanel();
+  const p = _panel();
   const res = {};
   if(!p.privateChannels) return res;
   const parts = p.privateChannels.split(",").map(s => s.trim()).filter(Boolean);
-  for(let i=0;i<parts.length;i++){
-    const kv = parts[i].split("=");
-    const id = kv[0] ? kv[0].trim() : "";
-    const link = kv[1] ? kv.slice(1).join("=").trim() : "";
+  parts.forEach(item => {
+    // split only on first =
+    const idx = item.indexOf("=");
+    if(idx === -1) {
+      const id = item.trim();
+      if(id) res[id] = null;
+      return;
+    }
+    const id = item.slice(0, idx).trim();
+    const link = item.slice(idx+1).trim();
     if(id) res[id] = link || null;
-  }
+  });
   return res;
 }
 
-/* get unified channels array (mix public and private ids) */
 function mcGetChats() {
-  const publicArr = _parsePublic();
-  const privateMap = _parsePrivateMap();
-  const privateIds = Object.keys(privateMap);
-  // combine: prefer public usernames first then private ids
-  const combined = publicArr.concat(privateIds).slice(0, MAX_CH);
-  return combined;
+  const pub = _parsePublic();
+  const privMap = _parsePrivateMap();
+  const privIds = Object.keys(privMap);
+  return pub.concat(privIds).slice(0, MAX_CHANNELS);
 }
 
-/* ---------------------------
-   Stored user states
-----------------------------*/
-function _getUserStates() {
-  return User.getProperty(STATE_PROP) || {};
-}
-function _saveUserStates(obj) {
-  User.setProperty(STATE_PROP, obj, "json");
-}
+function _getStates() { return User.getProperty(STATE_KEY) || {}; }
+function _saveStates(st) { User.setProperty(STATE_KEY, st, "json"); }
 
-/* ---------------------------
-   mcGetMissing: uses stored states
-----------------------------*/
+/* get missing from stored states */
 function mcGetMissing() {
   const chats = mcGetChats();
-  const st = _getUserStates();
-  return chats.filter(ch => st[ch] !== true);
+  const st = _getStates();
+  return chats.filter(c => st[c] !== true);
 }
 
-/* ---------------------------
-   isMember(): hybrid behavior
-   Use: if(!Libs.UtilityLib.isMember()) return;
-----------------------------*/
+/* --------------------- isMember (hybrid) --------------------- */
 function isMember(customFail) {
-  const panel = _getPanel();
+  const panel = _panel();
   const failCmd = customFail || panel.failCallback;
   const chats = mcGetChats();
 
@@ -161,240 +104,242 @@ function isMember(customFail) {
     return false;
   }
 
-  const st = _getUserStates();
+  const st = _getStates();
 
-  // If no stored states -> trigger manual check and return false (caller should stop)
+  // If no stored state -> force a fresh check
   if(Object.keys(st).length === 0) {
-    // force a fresh check; pass forced:true so callbacks know
+    // pass forced true
     mcCheck({ forced: true });
     return false;
   }
 
-  // If some missing according to stored states
+  // check using stored states
   const missing = chats.filter(ch => st[ch] !== true);
   if(missing.length > 0) {
+    // build full payload and call failCallback if configured
     if(failCmd) {
-      // Build enriched missing objects (id + link)
-      const payload = _buildResultPayloadFromStates(st);
-      Bot.run({
-        command: failCmd,
-        options: { joined: payload.joined, missing: payload.missing, multiple: payload.multiple, forced: false }
-      });
+      const payload = _payloadFromStates(st);
+      Bot.run({ command: failCmd, options: payload });
     }
     return false;
   }
 
-  // all good
   return true;
 }
 
-/* ---------------------------
-   mcCheck(passed_options)
-   Manual check entrypoint
-----------------------------*/
+/* --------------------- mcCheck (manual) --------------------- */
 function mcCheck(passed_options) {
-  const panel = _getPanel();
+  const panel = _panel();
   const chats = mcGetChats();
   if(chats.length === 0) {
     Bot.sendMessage("❌ No channels configured in admin panel.");
     return;
   }
 
-  // prepare private map for later
-  const privateMap = _parsePrivateMap();
-  const publicArr = _parsePublic();
+  // create session
+  const token = PREFIX + Date.now() + "_" + Math.floor(Math.random()*10000);
+  const sess = { token: token, total: chats.length, pending: chats.length, results: {}, passed: passed_options || {}, multiple: chats.length > 2 };
+  User.setProperty(SESSION_KEY, sess, "json");
 
-  // prepare session
-  const token = MC_PREFIX + Date.now() + "_" + Math.floor(Math.random()*9999);
-  const sess = {
-    token: token,
-    total: chats.length,
-    pending: chats.length,
-    results: {},
-    passed: passed_options || {},
-    multiple: chats.length > 2
-  };
-  User.setProperty(SESSION_PROP, sess, "json");
-
-  // If small list (<=2) => direct immediate calls
+  // small lists (<=2): direct getChatMember calls
   if(chats.length <= 2) {
-    for(let i=0;i<chats.length;i++){
-      const ch = chats[i];
-      Api.getChatMember({
-        chat_id: ch,
-        user_id: user.telegramid,
-        on_result: MC_PREFIX + "onOne " + encodeURIComponent(ch),
-        on_error: MC_PREFIX + "onErr " + encodeURIComponent(ch),
-        bb_options: { token: token }
+    try {
+      chats.forEach(ch => {
+        Api.getChatMember({
+          chat_id: ch,
+          user_id: user.telegramid,
+          on_result: PREFIX + "onOne " + encodeURIComponent(ch),
+          on_error: PREFIX + "onErr " + encodeURIComponent(ch),
+          bb_options: { token: token }
+        });
       });
+    } catch (e) {
+      // log & call failCallback with empty payload
+      try { throw e; } catch (err) { /* ensure shown in error tab */ }
+      _safeFailCallback({ joined: [], missing: _buildMissingPlaceholders(chats), multiple: sess.multiple, passed: sess.passed, forced: !!sess.passed.forced });
     }
     return;
   }
 
-  // For >2 channels -> batching with BATCH_SIZE
-  const delay = parseFloat(panel.batchDelay || 1);
+  // >2 channels -> batching
   const batches = [];
   for(let i=0;i<chats.length;i+=BATCH_SIZE) batches.push(chats.slice(i, i+BATCH_SIZE));
+  const delay = parseFloat(panel.batchDelay || 1);
 
-  // schedule batches via Bot.run
   for(let i=0;i<batches.length;i++){
+    const paramObj = { token: token, channels: batches[i] };
+    const paramsStr = JSON.stringify(paramObj);
     const runAfter = i === 0 ? 0.01 : delay * i;
-    Bot.run({
-      command: MC_PREFIX + "runBatch " + i,
-      options: { token: token, channels: batches[i] },
-      run_after: runAfter
-    });
+    try {
+      Bot.run({
+        command: PREFIX + "runBatch",
+        params: paramsStr,
+        run_after: runAfter
+      });
+    } catch (e) {
+      // logging
+      try { throw e; } catch (err) {}
+      // fail all safely
+      _safeFailCallback({ joined: [], missing: _buildMissingPlaceholders(chats), multiple: true, passed: sess.passed, forced: !!sess.passed.forced });
+      return;
+    }
   }
 }
 
-/* ---------------------------
-   runBatch handler
-----------------------------*/
+/* --------------------- runBatch handler (params is JSON) --------------------- */
 function runBatch() {
-  const token = options.token;
-  const channels = options.channels || [];
-  for(let i=0;i<channels.length;i++){
-    const ch = channels[i];
-    Api.getChatMember({
-      chat_id: ch,
-      user_id: user.telegramid,
-      on_result: MC_PREFIX + "onOne " + encodeURIComponent(ch),
-      on_error: MC_PREFIX + "onErr " + encodeURIComponent(ch),
-      bb_options: { token: token }
+  try {
+    if(!params) throw new Error("runBatch: missing params");
+    let data;
+    try { data = JSON.parse(params); } catch(e) { throw new Error("runBatch: invalid params JSON: " + params); }
+
+    const token = data.token;
+    const channels = data.channels || [];
+    if(!token) throw new Error("runBatch: missing token");
+
+    channels.forEach(ch => {
+      Api.getChatMember({
+        chat_id: ch,
+        user_id: user.telegramid,
+        on_result: PREFIX + "onOne " + encodeURIComponent(ch),
+        on_error: PREFIX + "onErr " + encodeURIComponent(ch),
+        bb_options: { token: token }
+      });
     });
+  } catch (err) {
+    // Option A: log error (error tab) and call fail callback with placeholders
+    try { throw err; } catch (e) {}
+    const panel = _panel();
+    const fail = panel.failCallback;
+    if(fail) {
+      try {
+        Bot.run({ command: fail, options: { joined: [], missing: [], multiple: true, passed: {}, forced: false } });
+      } catch (e2) { try { throw e2; } catch (e3) {} }
+    }
   }
 }
 
-/* ---------------------------
-   onOne / onErr handlers
-----------------------------*/
-function onOne(){
-  const ch = decodeURIComponent(params || "");
-  const sess = User.getProperty(SESSION_PROP);
-  if(!sess) return;
+/* --------------------- onOne / onErr --------------------- */
+function onOne() {
+  try {
+    const ch = decodeURIComponent(params || "");
+    const sess = User.getProperty(SESSION_KEY);
+    if(!sess) return;
+    if(!options.bb_options || options.bb_options.token !== sess.token) return;
 
-  // verify token
-  if(!options.bb_options || options.bb_options.token !== sess.token) return;
+    const status = options.result?.status;
+    const joined = ["member","administrator","creator"].includes(status);
+    sess.results[ch] = joined === true;
+    sess.pending = (sess.pending || 1) - 1;
+    User.setProperty(SESSION_KEY, sess, "json");
 
-  const status = options.result?.status;
-  const joined = ["member","administrator","creator"].includes(status);
-
-  sess.results[ch] = joined === true;
-  sess.pending = (sess.pending || 1) - 1;
-  User.setProperty(SESSION_PROP, sess, "json");
-
-  if(sess.pending <= 0) _finishCheck();
+    if(sess.pending <= 0) _finish();
+  } catch (err) {
+    try { throw err; } catch (e) {}
+  }
 }
 
-function onErr(){
-  const ch = decodeURIComponent(params || "");
-  const sess = User.getProperty(SESSION_PROP);
-  if(!sess) return;
+function onErr() {
+  try {
+    const ch = decodeURIComponent(params || "");
+    const sess = User.getProperty(SESSION_KEY);
+    if(!sess) return;
+    if(!options.bb_options || options.bb_options.token !== sess.token) return;
 
-  if(!options.bb_options || options.bb_options.token !== sess.token) return;
+    sess.results[ch] = false;
+    sess.pending = (sess.pending || 1) - 1;
+    User.setProperty(SESSION_KEY, sess, "json");
 
-  sess.results[ch] = false;
-  sess.pending = (sess.pending || 1) - 1;
-  User.setProperty(SESSION_PROP, sess, "json");
-
-  if(sess.pending <= 0) _finishCheck();
+    if(sess.pending <= 0) _finish();
+  } catch (err) {
+    try { throw err; } catch (e) {}
+  }
 }
 
-/* ---------------------------
-   Build result payload (enriched with links)
-   Used for callbacks and storage
-----------------------------*/
-function _buildResultPayload(resultsMap) {
-  // resultsMap: { "@name": true/false, "-100id": true/false }
+/* --------------------- build enriched payload --------------------- */
+function _buildPayloadFromResults(resultsMap) {
   const publicArr = _parsePublic();
   const privateMap = _parsePrivateMap();
-
   const chats = mcGetChats();
   const missing = [];
   const joined = [];
 
   chats.forEach(ch => {
-    const ok = !!resultsMap[ch];
-    const isPublic = publicArr.includes(ch);
+    const ok = resultsMap[ch] === true;
     let link = null;
-    if(isPublic) {
-      const uname = ch.replace(/^@/,"");
+    if(publicArr.includes(ch)) {
+      const uname = ch.replace(/^@/, "");
       link = "https://t.me/" + uname;
     } else {
-      // private id
       link = privateMap[ch] || null;
     }
     const obj = { id: ch, join_link: link };
     if(ok) joined.push(obj); else missing.push(obj);
   });
 
-  return { missing: missing, joined: joined, multiple: chats.length > 2 };
+  return { joined: joined, missing: missing, multiple: chats.length > 2 };
 }
 
-/* wrapper convenience using stored states */
-function _buildResultPayloadFromStates(states) {
-  // states might be missing some keys; ensure to iterate mcGetChats
-  const chats = mcGetChats();
-  const missing = [];
-  const joined = [];
-  const publicArr = _parsePublic();
+function _buildMissingPlaceholders(chats) {
+  // create simple objects for fallback reporting
   const privateMap = _parsePrivateMap();
-
+  const publicArr = _parsePublic();
+  const missing = [];
   chats.forEach(ch => {
-    const ok = states[ch] === true;
-    let link = null;
-    if(publicArr.includes(ch)) link = "https://t.me/" + ch.replace(/^@/,"");
-    else link = privateMap[ch] || null;
-
-    const obj = { id: ch, join_link: link };
-    if(ok) joined.push(obj); else missing.push(obj);
+    const isPub = publicArr.includes(ch);
+    const link = isPub ? ("https://t.me/" + ch.replace(/^@/,"")) : (privateMap[ch] || null);
+    missing.push({ id: ch, join_link: link });
   });
-
-  return { missing: missing, joined: joined, multiple: chats.length > 2 };
+  return missing;
 }
 
-/* ---------------------------
-   finalize session
-----------------------------*/
-function _finishCheck() {
-  const panel = _getPanel();
-  let sess = User.getProperty(SESSION_PROP);
+/* --------------------- finalize --------------------- */
+function _finish() {
+  const sess = User.getProperty(SESSION_KEY);
   if(!sess) return;
+  const panel = _panel();
 
-  const resultsMap = sess.results || {};
-  // Save states permanently
-  _saveUserStates(resultsMap);
+  const payload = _buildPayloadFromResults(sess.results || {});
+  // save states permanently (map id->bool)
+  const statesObj = {};
+  (payload.joined || []).forEach(item => { statesObj[item.id] = true; });
+  (payload.missing || []).forEach(item => { statesObj[item.id] = false; });
+  _saveStates(statesObj);
 
-  // Build payload for callbacks
-  const payload = _buildResultPayload(resultsMap);
-
-  // Clear session
-  User.setProperty(SESSION_PROP, null);
-
-  // Provide passed options and forced flag
-  const optionsForCb = {
-    joined: payload.joined,
-    missing: payload.missing,
+  // build callback options (always include fields)
+  const cbOptions = {
+    joined: payload.joined || [],
+    missing: payload.missing || [],
     multiple: !!sess.multiple,
     passed: sess.passed || {},
-    forced: !!sess.passed && !!sess.passed.forced
+    forced: !!(sess.passed && sess.passed.forced)
   };
 
-  // Call correct callback once
-  if(optionsForCb.missing.length === 0) {
-    if(panel.successCallback) {
-      Bot.run({ command: panel.successCallback, options: optionsForCb });
+  // clear session
+  User.setProperty(SESSION_KEY, null);
+  // call appropriate callback
+  try {
+    if(cbOptions.missing.length === 0) {
+      if(panel.successCallback) Bot.run({ command: panel.successCallback, options: cbOptions });
+    } else {
+      if(panel.failCallback) Bot.run({ command: panel.failCallback, options: cbOptions });
     }
-  } else {
-    if(panel.failCallback) {
-      Bot.run({ command: panel.failCallback, options: optionsForCb });
-    }
+  } catch (err) {
+    try { throw err; } catch (e) {}
   }
 }
 
-/* ---------------------------
-   Export API
-----------------------------*/
+/* --------------------- safe fail helper (Option A) --------------------- */
+function _safeFailCallback(cbOptions) {
+  const panel = _panel();
+  try {
+    if(panel.failCallback) Bot.run({ command: panel.failCallback, options: cbOptions || { joined: [], missing: [], multiple: false, passed: {}, forced: false } });
+  } catch (e) {
+    try { throw e; } catch (err) {}
+  }
+}
+
+/* --------------------- export --------------------- */
 publish({
   mcSetup: mcSetup,
   mcCheck: mcCheck,
@@ -403,7 +348,6 @@ publish({
   mcGetMissing: mcGetMissing
 });
 
-/* Register handlers */
-on(MC_PREFIX + "runBatch", runBatch);
-on(MC_PREFIX + "onOne", onOne);
-on(MC_PREFIX + "onErr", onErr);
+on(PREFIX + "runBatch", runBatch);
+on(PREFIX + "onOne", onOne);
+on(PREFIX + "onErr", onErr);
