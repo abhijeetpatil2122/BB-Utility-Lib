@@ -1,39 +1,45 @@
 /*
- * UtilityLib v13 — Final Stable Membership Checker
- * 
- * Safe batching, safe bb_options, correct multi-channel logic.
- * MCL-style callback reliability.
+ * UtilityLib v14 — FINAL STABLE MEMBERSHIP CHECKER
+ * -------------------------------------------------
+ * FIXES:
+ *  - Batch callbacks now fire reliably for 3+ channels
+ *  - Uses GLOBAL commands: UtilityMC_onOne / UtilityMC_onErr / UtilityMC_runBatch
+ *  - JSON params safe parsing
+ *  - bb_options always preserved
+ *  - 1–10 channels supported
+ *  - public + private with links
+ *  - consistent callback payloads
  */
 
-const PANEL = "SimpleMembershipPanel_v13";
-const PREFIX = "SMC13_";
+const PANEL = "SimpleMembershipPanel_v14";
+const PREFIX = "UtilityMC_";   // GLOBAL HANDLER PREFIX
 const ST_KEY = PREFIX + "states";
 const SES_KEY = PREFIX + "session";
 
 const MAX_CH = 10;
 const BATCH_SIZE = 2;
 
-/* ---------------------- Admin Panel Setup ---------------------- */
+/* ---------------------------------------------------------
+   Admin Panel Setup
+--------------------------------------------------------- */
 function mcSetup() {
   const panel = {
-    title: "Membership Checker v13 (Stable)",
-    description: "Public usernames + Private id=link, callbacks & batching",
+    title: "Membership Checker v14",
+    description: "Public + Private channels, batching & callbacks",
     icon: "person-add",
     fields: [
       {
         name: "publicChannels",
         title: "Public Channels (usernames)",
-        description: "Comma separated (e.g. @ParadoxBackup)",
         type: "string",
-        placeholder: "@ParadoxBackup, @Another",
-        icon: "globe"
+        placeholder: "@Channel1, @Channel2",
+        icon: "megaphone"
       },
       {
         name: "privateChannels",
         title: "Private Channels (id=link)",
-        description: "Comma separated id=link pairs",
         type: "string",
-        placeholder: "-100id=https://invite",
+        placeholder: "-100id=inviteLink",
         icon: "lock-closed"
       },
       {
@@ -41,37 +47,42 @@ function mcSetup() {
         title: "Success Callback",
         type: "string",
         placeholder: "/menu",
-        icon: "checkmark-circle"
+        icon: "checkmark"
       },
       {
         name: "failCallback",
         title: "Fail Callback",
         type: "string",
         placeholder: "/start",
-        icon: "close-circle"
+        icon: "warning"
       },
       {
         name: "batchDelay",
-        title: "Batch delay (seconds)",
+        title: "Batch Delay (seconds)",
         type: "integer",
-        placeholder: "1",
         value: 1,
-        icon: "timer"
+        icon: "time"
       }
     ]
   };
 
   AdminPanel.setPanel({ panel_name: PANEL, data: panel });
-  Bot.sendMessage("Membership Checker v13 panel created.");
+  Bot.sendMessage("Membership Checker v14 installed.");
 }
 
-/* ---------------------- Helpers ---------------------- */
 function _panel() { return AdminPanel.getPanelValues(PANEL) || {}; }
 
+/* ---------------------------------------------------------
+   Parsing
+--------------------------------------------------------- */
 function _parsePublic() {
   const p = _panel();
   if (!p.publicChannels) return [];
-  return p.publicChannels.split(",").map(s => s.trim()).filter(Boolean).slice(0, MAX_CH);
+  return p.publicChannels
+    .split(",")
+    .map(s => s.trim())
+    .filter(Boolean)
+    .slice(0, MAX_CH);
 }
 
 function _parsePrivateMap() {
@@ -82,51 +93,46 @@ function _parsePrivateMap() {
   p.privateChannels.split(",").map(s => s.trim()).filter(Boolean).forEach(item => {
     const eq = item.indexOf("=");
     if (eq === -1) {
-      const id = item.trim();
-      if(id) out[id] = null;
+      out[item.trim()] = null;
       return;
     }
     const id = item.slice(0, eq).trim();
-    const link = item.slice(eq+1).trim();
-    if(id) out[id] = link || null;
+    const link = item.slice(eq + 1).trim();
+    out[id] = link || null;
   });
 
   return out;
 }
 
 function mcGetChats() {
-  const pub = _parsePublic();
-  const privMap = _parsePrivateMap();
-  const privIds = Object.keys(privMap);
-  return pub.concat(privIds).slice(0, MAX_CH);
+  return [].concat(_parsePublic(), Object.keys(_parsePrivateMap())).slice(0, MAX_CH);
 }
 
+/* ---------------------------------------------------------
+   State Management
+--------------------------------------------------------- */
 function _getStates() { return User.getProperty(ST_KEY) || {}; }
-function _saveStates(obj) { User.setProperty(ST_KEY, obj, "json"); }
+function _saveStates(s) { User.setProperty(ST_KEY, s, "json"); }
 
-function mcGetMissing() {
-  const st = _getStates();
-  const chats = mcGetChats();
-  return chats.filter(c => st[c] !== true);
-}
-
-/* ---------------------- Build Callback Payload ---------------------- */
-function _buildPayloadFromResults(resultsMap) {
+/* ---------------------------------------------------------
+   Build Payload
+--------------------------------------------------------- */
+function _buildPayloadFromResults(res) {
   const pub = _parsePublic();
   const priv = _parsePrivateMap();
   const chats = mcGetChats();
 
-  const joined = [];
-  const missing = [];
+  const joined = [], missing = [];
 
   chats.forEach(ch => {
-    const ok = resultsMap[ch] === true;
-    let link = null;
-    if(pub.includes(ch)) link = "https://t.me/" + ch.replace(/^@/, "");
-    else link = priv[ch] || null;
+    const ok = res[ch] === true;
+    const link = pub.includes(ch)
+      ? "https://t.me/" + ch.replace(/^@/, "")
+      : priv[ch] || null;
 
     const obj = { id: ch, join_link: link };
-    if(ok) joined.push(obj); else missing.push(obj);
+    if (ok) joined.push(obj);
+    else missing.push(obj);
   });
 
   return {
@@ -136,51 +142,51 @@ function _buildPayloadFromResults(resultsMap) {
   };
 }
 
-function _buildMissingPlaceholders(chats) {
-  const pub = _parsePublic();
-  const priv = _parsePrivateMap();
-
-  return chats.map(ch => {
-    let link = pub.includes(ch) ? ("https://t.me/" + ch.replace(/^@/, "")) : (priv[ch] || null);
-    return { id: ch, join_link: link };
-  });
+function _missingPlaceholders() {
+  return mcGetChats().map(ch => ({
+    id: ch,
+    join_link:
+      _parsePublic().includes(ch)
+        ? "https://t.me/" + ch.replace(/^@/, "")
+        : (_parsePrivateMap()[ch] || null)
+  }));
 }
 
-/* ---------------------- Safe Fail Callback ---------------------- */
+/* ---------------------------------------------------------
+   Fail Wrapper
+--------------------------------------------------------- */
 function _safeFail(payload) {
   const p = _panel();
-  if(!p.failCallback) return;
-
-  try {
-    Bot.run({ command: p.failCallback, options: payload });
-  } catch(e) { try { throw e; } catch(err){} }
+  if (!p.failCallback) return;
+  try { Bot.run({ command: p.failCallback, options: payload }); } catch (e) {}
 }
 
-/* ---------------------- isMember() Hybrid ---------------------- */
+/* ---------------------------------------------------------
+   isMember() Hybrid
+--------------------------------------------------------- */
 function isMember(customFail) {
-  const panel = _panel();
-  const failCmd = customFail || panel.failCallback;
+  const st = _getStates();
   const chats = mcGetChats();
+  const fail = customFail || _panel().failCallback;
 
-  if(chats.length === 0) {
-    Bot.sendMessage("❌ No channels configured.");
+  if (chats.length === 0) {
+    Bot.sendMessage("❌ No channels defined.");
     return false;
   }
 
-  const st = _getStates();
-
-  if(Object.keys(st).length === 0) {
+  // No saved states → force check
+  if (Object.keys(st).length === 0) {
     mcCheck({ forced: true });
     return false;
   }
 
   const missing = chats.filter(c => st[c] !== true);
-  if(missing.length > 0) {
-    if(failCmd){
+  if (missing.length > 0) {
+    if (fail) {
       const payload = _buildPayloadFromResults(st);
       payload.passed = {};
       payload.forced = false;
-      Bot.run({ command: failCmd, options: payload });
+      Bot.run({ command: fail, options: payload });
     }
     return false;
   }
@@ -188,16 +194,20 @@ function isMember(customFail) {
   return true;
 }
 
-/* ---------------------- mcCheck() ---------------------- */
+/* ---------------------------------------------------------
+   mcCheck()
+--------------------------------------------------------- */
 function mcCheck(passed) {
   const panel = _panel();
   const chats = mcGetChats();
-  if(chats.length === 0){
+
+  if (chats.length === 0) {
     Bot.sendMessage("❌ No channels configured.");
     return;
   }
 
-  const token = PREFIX + Date.now() + "_" + Math.floor(Math.random()*9999);
+  const token = PREFIX + Date.now() + "_" + Math.floor(Math.random() * 9999);
+
   const sess = {
     token: token,
     total: chats.length,
@@ -208,43 +218,43 @@ function mcCheck(passed) {
   };
   User.setProperty(SES_KEY, sess, "json");
 
-  // small list: direct calls
-  if(chats.length <= 2){
+  // Direct mode for 1–2 channels → no batching
+  if (chats.length <= 2) {
     chats.forEach(ch => {
       Api.getChatMember({
         chat_id: ch,
         user_id: user.telegramid,
-        on_result: PREFIX + "onOne",
-        on_error: PREFIX + "onErr",
+        on_result: "UtilityMC_onOne",
+        on_error: "UtilityMC_onErr",
         bb_options: { token: token, channel: ch, ts: Date.now() }
       });
     });
     return;
   }
 
-  // batching
+  // Batch mode: 3–10 channels
   const delay = parseFloat(panel.batchDelay || 1);
 
   const batches = [];
-  for(let i = 0; i < chats.length; i += BATCH_SIZE)
+  for (let i = 0; i < chats.length; i += BATCH_SIZE)
     batches.push(chats.slice(i, i + BATCH_SIZE));
 
   batches.forEach((batch, idx) => {
-    const paramStr = JSON.stringify({ token: token, channels: batch });
-
     Bot.run({
-      command: PREFIX + "runBatch",
-      params: paramStr,
+      command: "UtilityMC_runBatch",
+      params: JSON.stringify({ token: token, channels: batch }),
       run_after: idx === 0 ? 0.01 : delay * idx
     });
   });
 }
 
-/* ---------------------- Batch Handler ---------------------- */
-function runBatch() {
+/* ---------------------------------------------------------
+   Batch Runner
+--------------------------------------------------------- */
+function UtilityMC_runBatch() {
   try {
-    if(!params) throw new Error("runBatch: missing params");
-    let data = JSON.parse(params);
+    if (!params) throw new Error("No params provided to runBatch");
+    const data = JSON.parse(params);
     const token = data.token;
     const channels = data.channels || [];
 
@@ -252,96 +262,102 @@ function runBatch() {
       Api.getChatMember({
         chat_id: ch,
         user_id: user.telegramid,
-        on_result: PREFIX + "onOne",
-        on_error: PREFIX + "onErr",
+        on_result: "UtilityMC_onOne",
+        on_error: "UtilityMC_onErr",
         bb_options: { token: token, channel: ch, ts: Date.now() }
       });
     });
 
   } catch (e) {
-    try { throw e; } catch(err){}
-    const chats = mcGetChats();
+    // fallback fail
     _safeFail({
       joined: [],
-      missing: _buildMissingPlaceholders(chats),
-      multiple: chats.length > 2,
+      missing: _missingPlaceholders(),
+      multiple: true,
       passed: {},
       forced: false
     });
+    try { throw e; } catch(err){}
   }
 }
 
-/* ---------------------- onOne / onErr ---------------------- */
-function onOne() {
+/* ---------------------------------------------------------
+   onOne / onErr
+--------------------------------------------------------- */
+function UtilityMC_onOne() {
   try {
     const sess = User.getProperty(SES_KEY);
-    if(!sess) return;
+    if (!sess) return;
 
     const bb = options.bb_options;
-    if(!bb || bb.token !== sess.token) return;
+    if (!bb || bb.token !== sess.token) return;
 
     const ch = bb.channel;
-    const status = options.result?.status;
-    const ok = ["member","administrator","creator"].includes(status);
+    const ok = ["member", "administrator", "creator"].includes(
+      options.result?.status
+    );
 
     sess.results[ch] = ok;
     sess.pending--;
 
     User.setProperty(SES_KEY, sess, "json");
-    if(sess.pending <= 0) _finish();
+    if (sess.pending <= 0) _finish();
 
-  } catch(e){ try{ throw e; }catch(err){} }
+  } catch (e) { try { throw e; } catch(err){} }
 }
 
-function onErr() {
+function UtilityMC_onErr() {
   try {
     const sess = User.getProperty(SES_KEY);
-    if(!sess) return;
+    if (!sess) return;
 
     const bb = options.bb_options;
-    if(!bb || bb.token !== sess.token) return;
+    if (!bb || bb.token !== sess.token) return;
 
     const ch = bb.channel;
     sess.results[ch] = false;
     sess.pending--;
 
     User.setProperty(SES_KEY, sess, "json");
-    if(sess.pending <= 0) _finish();
+    if (sess.pending <= 0) _finish();
 
-  } catch(e){ try{ throw e; }catch(err){} }
+  } catch (e) { try { throw e; } catch(err){} }
 }
 
-/* ---------------------- finalize session ---------------------- */
+/* ---------------------------------------------------------
+   Finalize Session
+--------------------------------------------------------- */
 function _finish() {
   const panel = _panel();
   const sess = User.getProperty(SES_KEY);
-  if(!sess) return;
+  if (!sess) return;
 
   const payload = _buildPayloadFromResults(sess.results);
   payload.passed = sess.passed || {};
   payload.forced = !!(sess.passed && sess.passed.forced);
 
-  // save states
+  // save user state
   const st = {};
   payload.joined.forEach(j => st[j.id] = true);
   payload.missing.forEach(m => st[m.id] = false);
   _saveStates(st);
 
-  // clear session
   User.setProperty(SES_KEY, null);
 
   try {
-    if(payload.missing.length === 0) {
-      if(panel.successCallback)
+    if (payload.missing.length === 0) {
+      if (panel.successCallback)
         Bot.run({ command: panel.successCallback, options: payload });
     } else {
-      if(panel.failCallback)
+      if (panel.failCallback)
         Bot.run({ command: panel.failCallback, options: payload });
     }
-  } catch(e){ try{ throw e; }catch(err){} }
+  } catch (e) { try { throw e; } catch(err){} }
 }
 
-/* ---------------------- Export API ---------------------- */
+/* ---------------------------------------------------------
+   Export API
+--------------------------------------------------------- */
 publish({
   mcSetup: mcSetup,
   mcCheck: mcCheck,
@@ -350,7 +366,7 @@ publish({
   mcGetMissing: mcGetMissing
 });
 
-/* Register handlers */
-on(PREFIX + "runBatch", runBatch);
-on(PREFIX + "onOne", onOne);
-on(PREFIX + "onErr", onErr);
+/* Handlers */
+on("UtilityMC_runBatch", UtilityMC_runBatch);
+on("UtilityMC_onOne", UtilityMC_onOne);
+on("UtilityMC_onErr", UtilityMC_onErr);
