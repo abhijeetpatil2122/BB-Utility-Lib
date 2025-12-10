@@ -1,27 +1,25 @@
 /*
- * UtilityLib v14 — FINAL STABLE MEMBERSHIP CHECKER
- * -------------------------------------------------
- * FIXES:
- *  - Batch callbacks now fire reliably for 3+ channels
- *  - Uses GLOBAL commands: UtilityMC_onOne / UtilityMC_onErr / UtilityMC_runBatch
- *  - JSON params safe parsing
- *  - bb_options always preserved
- *  - 1–10 channels supported
- *  - public + private with links
- *  - consistent callback payloads
+ * UtilityLib v14 — FINAL STABLE MEMBERSHIP CHECKER (FIXED)
+ * -------------------------------------------------------
+ * Fixed: mcGetMissing function implemented and exported.
+ *
+ * Features:
+ *  - Admin panel (publicChannels, privateChannels, successCallback, failCallback, batchDelay)
+ *  - Hybrid isMember()
+ *  - mcCheck() with safe batching
+ *  - Global handlers: UtilityMC_runBatch / UtilityMC_onOne / UtilityMC_onErr
+ *  - Returns full payload to callbacks
  */
 
 const PANEL = "SimpleMembershipPanel_v14";
-const PREFIX = "UtilityMC_";   // GLOBAL HANDLER PREFIX
+const PREFIX = "UtilityMC_";
 const ST_KEY = PREFIX + "states";
 const SES_KEY = PREFIX + "session";
 
 const MAX_CH = 10;
 const BATCH_SIZE = 2;
 
-/* ---------------------------------------------------------
-   Admin Panel Setup
---------------------------------------------------------- */
+/* ---------------------- Admin Panel Setup ---------------------- */
 function mcSetup() {
   const panel = {
     title: "Membership Checker v14",
@@ -72,9 +70,7 @@ function mcSetup() {
 
 function _panel() { return AdminPanel.getPanelValues(PANEL) || {}; }
 
-/* ---------------------------------------------------------
-   Parsing
---------------------------------------------------------- */
+/* ---------------------- Parsing ---------------------- */
 function _parsePublic() {
   const p = _panel();
   if (!p.publicChannels) return [];
@@ -108,15 +104,25 @@ function mcGetChats() {
   return [].concat(_parsePublic(), Object.keys(_parsePrivateMap())).slice(0, MAX_CH);
 }
 
-/* ---------------------------------------------------------
-   State Management
---------------------------------------------------------- */
+/* ---------------------- State Management ---------------------- */
 function _getStates() { return User.getProperty(ST_KEY) || {}; }
 function _saveStates(s) { User.setProperty(ST_KEY, s, "json"); }
 
-/* ---------------------------------------------------------
-   Build Payload
---------------------------------------------------------- */
+/* ---------------------- mcGetMissing (fixed) ---------------------- */
+function mcGetMissing() {
+  const chats = mcGetChats();
+  const st = _getStates();
+  const missing = chats.filter(c => st[c] !== true);
+  // return enriched missing objects (id + join_link) for convenience
+  const pub = _parsePublic();
+  const priv = _parsePrivateMap();
+  return missing.map(ch => ({
+    id: ch,
+    join_link: pub.includes(ch) ? ("https://t.me/" + ch.replace(/^@/, "")) : (priv[ch] || null)
+  }));
+}
+
+/* ---------------------- Build Payload ---------------------- */
 function _buildPayloadFromResults(res) {
   const pub = _parsePublic();
   const priv = _parsePrivateMap();
@@ -152,18 +158,14 @@ function _missingPlaceholders() {
   }));
 }
 
-/* ---------------------------------------------------------
-   Fail Wrapper
---------------------------------------------------------- */
+/* ---------------------- Fail Wrapper ---------------------- */
 function _safeFail(payload) {
   const p = _panel();
   if (!p.failCallback) return;
   try { Bot.run({ command: p.failCallback, options: payload }); } catch (e) {}
 }
 
-/* ---------------------------------------------------------
-   isMember() Hybrid
---------------------------------------------------------- */
+/* ---------------------- isMember() Hybrid ---------------------- */
 function isMember(customFail) {
   const st = _getStates();
   const chats = mcGetChats();
@@ -194,9 +196,7 @@ function isMember(customFail) {
   return true;
 }
 
-/* ---------------------------------------------------------
-   mcCheck()
---------------------------------------------------------- */
+/* ---------------------- mcCheck() ---------------------- */
 function mcCheck(passed) {
   const panel = _panel();
   const chats = mcGetChats();
@@ -248,9 +248,7 @@ function mcCheck(passed) {
   });
 }
 
-/* ---------------------------------------------------------
-   Batch Runner
---------------------------------------------------------- */
+/* ---------------------- Batch Runner ---------------------- */
 function UtilityMC_runBatch() {
   try {
     if (!params) throw new Error("No params provided to runBatch");
@@ -281,9 +279,7 @@ function UtilityMC_runBatch() {
   }
 }
 
-/* ---------------------------------------------------------
-   onOne / onErr
---------------------------------------------------------- */
+/* ---------------------- onOne / onErr ---------------------- */
 function UtilityMC_onOne() {
   try {
     const sess = User.getProperty(SES_KEY);
@@ -324,9 +320,7 @@ function UtilityMC_onErr() {
   } catch (e) { try { throw e; } catch(err){} }
 }
 
-/* ---------------------------------------------------------
-   Finalize Session
---------------------------------------------------------- */
+/* ---------------------- finalize session ---------------------- */
 function _finish() {
   const panel = _panel();
   const sess = User.getProperty(SES_KEY);
@@ -355,9 +349,7 @@ function _finish() {
   } catch (e) { try { throw e; } catch(err){} }
 }
 
-/* ---------------------------------------------------------
-   Export API
---------------------------------------------------------- */
+/* ---------------------- Export API ---------------------- */
 publish({
   mcSetup: mcSetup,
   mcCheck: mcCheck,
