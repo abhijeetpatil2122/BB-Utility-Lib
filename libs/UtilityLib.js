@@ -1,11 +1,10 @@
 /*
- * UtilityLib v17 — Final (cache + sequential + passed options)
- *
- * - Sequential checking (MCL-style)
- * - Skips channels already stored as joined (user-level cache)
- * - mcCheck(passedOptions) supports passed data; passed.multiple auto-set
- * - isMember() hybrid (cached; triggers mcCheck if unknown)
- * - Callbacks always get full payload
+ * UtilityLib v17 — FINAL FIXED RELEASE
+ * - Sequential checks (MCL-style)
+ * - Caching of per-user joined states (speeds repeat checks)
+ * - mcCheck(passedOptions) supports optional passed data
+ * - Callbacks ALWAYS receive full payload: { joined, missing, multiple, passed, forced }
+ * - Safer error handling: critical errors are thrown so they appear in Error tab
  */
 
 const PANEL = "SimpleMembershipPanel_v17";
@@ -14,7 +13,7 @@ const SES_KEY = PREFIX + "session";
 const STATES_KEY = PREFIX + "states";
 
 const MAX_CH = 10;
-const STAGGER = 0.1; // sec
+const STAGGER = 0.1; // seconds between sequential checks
 
 /* ---------------- Admin Panel ---------------- */
 function mcSetup() {
@@ -62,7 +61,7 @@ function mcGetChats() {
   return [].concat(_parsePublic(), Object.keys(_parsePrivateMap())).slice(0, MAX_CH);
 }
 
-/* ---------------- State management ---------------- */
+/* ---------------- States (per-user) ---------------- */
 function _getStates() { return User.getProperty(STATES_KEY) || {}; }
 function _saveStates(obj) { User.setProperty(STATES_KEY, obj, "json"); }
 
@@ -83,21 +82,29 @@ function _buildPayloadFromResults(results) {
   return { joined: joined, missing: missing, multiple: chats.length > 2 };
 }
 
-/* ---------------- Convenience: mcGetMissing (enriched) ---------------- */
+/* ---------------- helper: enriched missing for caller ---------------- */
 function mcGetMissing() {
   const states = _getStates();
   const payload = _buildPayloadFromResults(states);
   return payload.missing;
 }
 
-/* ---------------- Safe fail helper ---------------- */
+/* ---------------- safe fail callback ---------------- */
 function _safeFail(payload) {
   const p = _panel();
   if (!p.failCallback) return;
-  try { Bot.run({ command: p.failCallback, options: payload }); } catch (e) { try { throw e; } catch (err) {} }
+  try {
+    Bot.run({ command: p.failCallback, options: payload });
+  } catch (e) {
+    // Critical: surface to Error tab for debugging
+    throw new Error("UtilityLib: _safeFail Bot.run failed: " + (e && e.message));
+  }
 }
 
-/* ---------------- isMember() hybrid ---------------- */
+/* ---------------- isMember (hybrid) ----------------
+   - If there are unknown channels -> force mcCheck() and return false
+   - If cached states present -> return quickly
+--------------------------------------------------*/
 function isMember(customFail) {
   const chats = mcGetChats();
   const panel = _panel();
@@ -110,22 +117,21 @@ function isMember(customFail) {
 
   const states = _getStates();
 
-  // find which channels have undefined state -> need check
+  // unknown channels => force check
   const unknown = chats.filter(ch => (states[ch] === undefined));
   if (unknown.length > 0) {
-    // force check for missing ones
     mcCheck({ forced: true });
-    return false;
+    return false; // caller must return
   }
 
-  // All known: check if any false
+  // if any false -> fail
   const missing = chats.filter(ch => states[ch] !== true);
   if (missing.length > 0) {
     if (fail) {
       const payload = _buildPayloadFromResults(states);
       payload.passed = {};
       payload.forced = false;
-      try { Bot.run({ command: fail, options: payload }); } catch (e) { try { throw e; } catch (err) {} }
+      try { Bot.run({ command: fail, options: payload }); } catch (e) { throw new Error("UtilityLib: isMember fail Bot.run failed: " + (e && e.message)); }
     }
     return false;
   }
@@ -134,13 +140,12 @@ function isMember(customFail) {
 }
 
 /* ---------------- mcCheck(passedOptions) ----------------
-   - speed improvement: skip channels that are already true in user states
-   - sequential checking of MUST_CHECK channels only
---------------------------------------------------------*/
+   * Speed: only check channels that are not already true in user states
+   * Sequential: run checks one-by-one (UtilityMC_checkNext)
+---------------------------------------------------------*/
 function mcCheck(passedOptions) {
   const panel = _panel();
   const allChats = mcGetChats();
-
   if (allChats.length === 0) {
     Bot.sendMessage("❌ No channels configured in Admin Panel.");
     return;
@@ -148,62 +153,55 @@ function mcCheck(passedOptions) {
 
   const states = _getStates();
 
-  // Determine channels we actually need to check
-  // Must-check = channels that are undefined OR false
+  // mustCheck = unknown or false
   const mustCheck = allChats.filter(ch => states[ch] !== true);
 
-  // If nothing to check -> finish immediately with success (all joined)
+  // if nothing to check -> success immediately
   if (mustCheck.length === 0) {
-    // build payload from states
     const payload = _buildPayloadFromResults(states);
     payload.passed = passedOptions || {};
     payload.passed.multiple = allChats.length > 2;
     payload.forced = !!(passedOptions && passedOptions.forced);
-    // save states to ensure consistency
+    // save states to be safe
     _saveStates(states);
-    // call successCallback
     if (panel.successCallback) {
-      try { Bot.run({ command: panel.successCallback, options: payload }); } catch (e) { try { throw e; } catch (err) {} }
+      try { Bot.run({ command: panel.successCallback, options: payload }); }
+      catch (e) { throw new Error("UtilityLib: mcCheck immediate success Bot.run failed: " + (e && e.message)); }
     }
     return;
   }
 
-  // prepare session with mustCheck list but keep full chat list too
-  const token = PREFIX + "t" + Date.now() + "_" + Math.floor(Math.random()*9999);
+  // create session with mustCheck
+  const token = PREFIX + "t" + Date.now() + "_" + Math.floor(Math.random() * 9999);
   const session = {
     token: token,
     allChats: allChats,
     chats: mustCheck,
     index: 0,
-    results: Object.assign({}, states), // copy existing known states (so final payload merges)
+    results: Object.assign({}, states), // merge existing known
     passed: passedOptions || {}
   };
-  // mark passed.multiple
   session.passed.multiple = allChats.length > 2;
 
   User.setProperty(SES_KEY, session, "json");
 
-  // schedule first check
+  // schedule first sequential check
   try {
-    Bot.run({
-      command: "UtilityMC_checkNext",
-      run_after: 0.01,
-      options: { token: token }
-    });
+    Bot.run({ command: "UtilityMC_checkNext", run_after: 0.01, options: { token: token } });
   } catch (e) {
-    // fallback fail
-    _safeFail({ joined: [], missing: _buildPayloadFromResults({}).missing, multiple: session.passed.multiple, passed: session.passed, forced: !!session.passed.forced });
-    try { throw e; } catch (err) {}
+    // critical: surface error
+    throw new Error("UtilityLib: mcCheck scheduling checkNext failed: " + (e && e.message));
   }
 }
 
 /* ---------------- UtilityMC_checkNext ----------------
-   sequentially checks session.chats[ index ]
+   Runs api.getChatMember for session.chats[session.index]
+   Uses sequential scheduling to avoid BB nested-subcommand limits
 -----------------------------------------------------*/
 function UtilityMC_checkNext() {
   try {
-    const opt = options || {};
-    const token = opt.token;
+    const opts = options || {};
+    const token = opts.token;
     if (!token) return;
     const sess = User.getProperty(SES_KEY);
     if (!sess || sess.token !== token) return;
@@ -211,7 +209,7 @@ function UtilityMC_checkNext() {
     const idx = sess.index || 0;
     const list = sess.chats || [];
     if (idx >= list.length) {
-      _finish(); // nothing to do
+      _finish();
       return;
     }
 
@@ -224,12 +222,9 @@ function UtilityMC_checkNext() {
       on_error: "UtilityMC_onErr",
       bb_options: { token: token, channel: ch, index: idx }
     });
-
   } catch (e) {
-    try { throw e; } catch (err) {}
-    // safe fail
-    const sessTmp = User.getProperty(SES_KEY) || {};
-    _safeFail({ joined: [], missing: _buildPayloadFromResults({}).missing, multiple: !!sessTmp.passed?.multiple, passed: sessTmp.passed || {}, forced: !!sessTmp.passed?.forced });
+    // critical: show error in Error tab so you can debug
+    throw new Error("UtilityLib: UtilityMC_checkNext failed: " + (e && e.message));
   }
 }
 
@@ -245,25 +240,19 @@ function UtilityMC_onOne() {
     const ch = bb.channel;
     const ok = ["member", "administrator", "creator"].includes(options.result?.status);
 
-    // write result (merge with any existing)
     sess.results[ch] = ok === true;
-
-    // increment index and persist
     sess.index = (sess.index || 0) + 1;
     User.setProperty(SES_KEY, sess, "json");
 
-    // schedule next check or finish
     if (sess.index < (sess.chats || []).length) {
-      Bot.run({
-        command: "UtilityMC_checkNext",
-        run_after: STAGGER,
-        options: { token: sess.token }
-      });
+      // schedule next check
+      Bot.run({ command: "UtilityMC_checkNext", run_after: STAGGER, options: { token: sess.token } });
     } else {
       _finish();
     }
-
-  } catch (e) { try { throw e; } catch (err) {} }
+  } catch (e) {
+    throw new Error("UtilityLib: UtilityMC_onOne error: " + (e && e.message));
+  }
 }
 
 function UtilityMC_onErr() {
@@ -276,21 +265,17 @@ function UtilityMC_onErr() {
 
     const ch = bb.channel;
     sess.results[ch] = false;
-
-    // increment index
     sess.index = (sess.index || 0) + 1;
     User.setProperty(SES_KEY, sess, "json");
 
     if (sess.index < (sess.chats || []).length) {
-      Bot.run({
-        command: "UtilityMC_checkNext",
-        run_after: STAGGER,
-        options: { token: sess.token }
-      });
+      Bot.run({ command: "UtilityMC_checkNext", run_after: STAGGER, options: { token: sess.token } });
     } else {
       _finish();
     }
-  } catch (e) { try { throw e; } catch (err) {} }
+  } catch (e) {
+    throw new Error("UtilityLib: UtilityMC_onErr error: " + (e && e.message));
+  }
 }
 
 /* ---------------- finish ---------------- */
@@ -299,16 +284,15 @@ function _finish() {
   if (!sess) return;
   const panel = _panel();
 
-  // build payload merging known results (sess.results) for all chats
-  const mergedResults = Object.assign({}, sess.results || {});
-  // ensure we have entries for allChats (if missing -> false)
-  (sess.allChats || []).forEach(ch => { if (mergedResults[ch] === undefined) mergedResults[ch] = false; });
+  // ensure results for all chats in allChats
+  const merged = Object.assign({}, sess.results || {});
+  (sess.allChats || []).forEach(ch => { if (merged[ch] === undefined) merged[ch] = false; });
 
-  const core = _buildPayloadFromResults(mergedResults);
+  const core = _buildPayloadFromResults(merged);
   core.passed = sess.passed || {};
   core.forced = !!(sess.passed && sess.passed.forced);
 
-  // save persistent states (id => bool)
+  // save persistent states
   const states = {};
   (core.joined || []).forEach(j => states[j.id] = true);
   (core.missing || []).forEach(m => states[m.id] = false);
@@ -317,14 +301,16 @@ function _finish() {
   // clear session
   User.setProperty(SES_KEY, null);
 
-  // call appropriate callback with full payload
+  // call callback
   try {
     if ((core.missing || []).length === 0) {
       if (panel.successCallback) Bot.run({ command: panel.successCallback, options: core });
     } else {
       if (panel.failCallback) Bot.run({ command: panel.failCallback, options: core });
     }
-  } catch (e) { try { throw e; } catch (err) {} }
+  } catch (e) {
+    throw new Error("UtilityLib: _finish callback run failed: " + (e && e.message));
+  }
 }
 
 /* ---------------- Export API ---------------- */
@@ -336,7 +322,7 @@ publish({
   mcGetMissing: mcGetMissing
 });
 
-/* ---------------- Register handlers ---------------- */
+/* ---------------- Handlers registration ---------------- */
 on("UtilityMC_checkNext", UtilityMC_checkNext);
 on("UtilityMC_onOne", UtilityMC_onOne);
 on("UtilityMC_onErr", UtilityMC_onErr);
