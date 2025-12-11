@@ -1,177 +1,129 @@
 /*
- * UtilityLib v15 — FINAL PRODUCTION MEMBERSHIP CHECKER
- * -----------------------------------------------------
- * FIX: Per-channel background tasks (MCL-style)
- * FIX: Works for 1–10 channels
- * FIX: Reliable callbacks for 3+ channels
- * FIX: Payload ALWAYS correct
- * 
- * Features:
- *  - Admin panel: public, private(id=link), successCallback, failCallback
- *  - mcCheck() runs 1 check per channel (safe)
- *  - isMember() hybrid (cached + dynamic)
- *  - 0.1s stagger per channel for stability
+ * UtilityLib v16 — Sequential Membership Checker (final)
+ *
+ * - Sequential engine (MCL-style): checks channels one-by-one
+ * - Admin panel: publicChannels, privateChannels (id=link), successCallback, failCallback
+ * - mcCheck(), isMember(), mcGetChats(), mcGetMissing()
+ * - Safe for 1..10 channels (no "too many sub commands" errors)
  */
 
-const PANEL = "SimpleMembershipPanel_v15";
-
-const PREFIX = "UtilityMC_";  
+const PANEL = "SimpleMembershipPanel_v16";
+const PREFIX = "UtilityMC_"; // used for keys
 const SES_KEY = PREFIX + "session";
 const STATES_KEY = PREFIX + "states";
 
 const MAX_CH = 10;
+const STAGGER = 0.1; // seconds between scheduled next checks
 
-/* ---------------------------------------------------------
-   Admin Panel Setup
---------------------------------------------------------- */
-function mcSetup() {
+/* ---------------- Admin panel ---------------- */
+function mcSetup(){
   AdminPanel.setPanel({
     panel_name: PANEL,
     data: {
-      title: "Membership Checker v15",
-      description: "Stable, fast, simple multi-channel membership checker",
+      title: "Membership Checker v16",
+      description: "Public + Private channels (id=link), callbacks",
       icon: "person-add",
       fields: [
-        {
-          name: "publicChannels",
-          title: "Public Channels",
-          type: "string",
-          placeholder: "@channel1, @channel2",
-          icon: "megaphone"
-        },
-        {
-          name: "privateChannels",
-          title: "Private Channels (id=link)",
-          type: "string",
-          placeholder: "-100id=inviteLink",
-          icon: "lock-closed"
-        },
-        {
-          name: "successCallback",
-          title: "Success Callback",
-          type: "string",
-          placeholder: "/menu",
-          icon: "checkmark"
-        },
-        {
-          name: "failCallback",
-          title: "Fail Callback",
-          type: "string",
-          placeholder: "/start",
-          icon: "warning"
-        }
+        { name: "publicChannels", title: "Public Channels", type: "string", placeholder: "@ParadoxBackup, @Another", icon: "globe" },
+        { name: "privateChannels", title: "Private Channels (id=link)", type: "string", placeholder: "-100id=https://t.me/+Invite", icon: "lock-closed" },
+        { name: "successCallback", title: "Success Callback", type: "string", placeholder: "/menu", icon: "checkmark" },
+        { name: "failCallback", title: "Fail Callback", type: "string", placeholder: "/start", icon: "warning" },
+        { name: "batchDelay", title: "Batch delay (unused)", type: "integer", placeholder: "1", value: 1, icon: "time" }
       ]
     }
   });
-
-  Bot.sendMessage("Membership Checker v15 panel installed.");
+  Bot.sendMessage("Membership Checker v16: Admin panel created.");
 }
 
-function _panel() { return AdminPanel.getPanelValues(PANEL) || {}; }
+function _panel(){ return AdminPanel.getPanelValues(PANEL) || {}; }
 
-/* ---------------------------------------------------------
-   Parsing
---------------------------------------------------------- */
-function _parsePublic() {
+/* ---------------- Parsers ---------------- */
+function _parsePublic(){
   const p = _panel();
-  if (!p.publicChannels) return [];
-  return p.publicChannels.split(",").map(s => s.trim()).filter(Boolean).slice(0, MAX_CH);
+  if(!p.publicChannels) return [];
+  return p.publicChannels.split(",").map(s=>s.trim()).filter(Boolean).slice(0, MAX_CH);
 }
 
-function _parsePrivateMap() {
+function _parsePrivateMap(){
   const p = _panel();
-  const out = {};
-  if (!p.privateChannels) return out;
-
-  p.privateChannels.split(",").map(s => s.trim()).filter(Boolean).forEach(pair => {
-    const eq = pair.indexOf("=");
-    if (eq === -1) { out[pair.trim()] = null; return; }
-    const id = pair.slice(0, eq).trim();
-    const link = pair.slice(eq + 1).trim();
-    out[id] = link || null;
+  const map = {};
+  if(!p.privateChannels) return map;
+  p.privateChannels.split(",").map(s=>s.trim()).filter(Boolean).forEach(pair=>{
+    const idx = pair.indexOf("=");
+    if(idx === -1){ map[pair.trim()] = null; return; }
+    const id = pair.slice(0, idx).trim();
+    const link = pair.slice(idx+1).trim();
+    map[id] = link || null;
   });
-
-  return out;
+  return map;
 }
 
-function mcGetChats() {
-  return [..._parsePublic(), ...Object.keys(_parsePrivateMap())].slice(0, MAX_CH);
-}
-
-/* ---------------------------------------------------------
-   State Storage
---------------------------------------------------------- */
-function _getStates() { return User.getProperty(STATES_KEY) || {}; }
-function _saveStates(s) { User.setProperty(STATES_KEY, s, "json"); }
-
-/* ---------------------------------------------------------
-   Build Payload
---------------------------------------------------------- */
-function _buildPayload(results) {
+function mcGetChats(){
   const pub = _parsePublic();
-  const priv = _parsePrivateMap();
+  const priv = Object.keys(_parsePrivateMap());
+  return pub.concat(priv).slice(0, MAX_CH);
+}
+
+/* ---------------- State storage ---------------- */
+function _getStates(){ return User.getProperty(STATES_KEY) || {}; }
+function _saveStates(o){ User.setProperty(STATES_KEY, o, "json"); }
+
+/* ---------------- Payload builder ---------------- */
+function _buildPayload(results){
+  const pub = _parsePublic();
+  const privMap = _parsePrivateMap();
   const chats = mcGetChats();
+  const joined = [], missing = [];
 
-  const joined = [];
-  const missing = [];
-
-  chats.forEach(ch => {
+  chats.forEach(ch=>{
     const ok = results[ch] === true;
-    const link = pub.includes(ch)
-      ? "https://t.me/" + ch.replace(/^@/, "")
-      : (priv[ch] || null);
-
+    const link = pub.includes(ch) ? "https://t.me/" + ch.replace(/^@/,"") : (privMap[ch] || null);
     const obj = { id: ch, join_link: link };
-    if (ok) joined.push(obj); else missing.push(obj);
+    if(ok) joined.push(obj); else missing.push(obj);
   });
 
-  return {
-    joined: joined,
-    missing: missing,
-    multiple: chats.length > 2
-  };
+  return { joined: joined, missing: missing, multiple: chats.length > 2 };
 }
 
-function _missingPlaceholders() {
-  return _buildPayload({}).missing;
-}
-
-/* ---------------------------------------------------------
-   Fail Callback Helper
---------------------------------------------------------- */
-function _safeFail(payload) {
-  const panel = _panel();
-  if (!panel.failCallback) return;
-  try { Bot.run({ command: panel.failCallback, options: payload }); } catch (e) {}
-}
-
-/* ---------------------------------------------------------
-   isMember (cached check + forced refresh)
---------------------------------------------------------- */
-function isMember(customFail) {
+function mcGetMissing(){
   const states = _getStates();
-  const chats = mcGetChats();
-  const fail = customFail || _panel().failCallback;
+  const payload = _buildPayload(states);
+  return payload.missing;
+}
 
-  if (chats.length === 0) {
-    Bot.sendMessage("❌ No channels configured.");
+/* ---------------- Safe fail ---------------- */
+function _safeFail(payload){
+  const panel = _panel();
+  if(!panel.failCallback) return;
+  try{ Bot.run({ command: panel.failCallback, options: payload }); } catch(e){ try{ throw e; } catch(err){} }
+}
+
+/* ---------------- isMember (hybrid) ---------------- */
+function isMember(customFail){
+  const chats = mcGetChats();
+  const panel = _panel();
+  const fail = customFail || panel.failCallback;
+
+  if(chats.length === 0){
+    Bot.sendMessage("❌ No channels configured in admin panel.");
     return false;
   }
 
-  // No cache → force check
-  if (Object.keys(states).length === 0) {
+  const states = _getStates();
+
+  if(Object.keys(states).length === 0){
+    // no cached data — force manual check
     mcCheck({ forced: true });
     return false;
   }
 
-  const missing = chats.filter(c => states[c] !== true);
-
-  if (missing.length > 0) {
-    if (fail) {
+  const missing = chats.filter(ch => states[ch] !== true);
+  if(missing.length > 0){
+    if(fail){
       const payload = _buildPayload(states);
       payload.passed = {};
       payload.forced = false;
-      Bot.run({ command: fail, options: payload });
+      try{ Bot.run({ command: fail, options: payload }); } catch(e){ try{ throw e; } catch(err){} }
     }
     return false;
   }
@@ -179,149 +131,180 @@ function isMember(customFail) {
   return true;
 }
 
-/* ---------------------------------------------------------
-   mcCheck() — Core Logic (v15 MCL-style)
---------------------------------------------------------- */
-function mcCheck(passed) {
+/* ---------------- mcCheck (sequential) ---------------- */
+function mcCheck(passed_options){
   const panel = _panel();
   const chats = mcGetChats();
 
-  if (chats.length === 0) {
+  if(chats.length === 0){
     Bot.sendMessage("❌ No channels configured.");
     return;
   }
 
-  const token = PREFIX + "t" + Date.now();
+  const token = PREFIX + "t" + Date.now() + "_" + Math.floor(Math.random()*9999);
 
   const session = {
     token: token,
-    total: chats.length,
-    pending: chats.length,
+    chats: chats,
+    index: 0,
     results: {},
-    passed: passed || {},
+    passed: passed_options || {},
     multiple: chats.length > 2
   };
 
   User.setProperty(SES_KEY, session, "json");
 
-  // MCL-style: 1 background task per channel
-  chats.forEach((ch, index) => {
+  // schedule first check via Bot.run (background) to avoid nesting
+  try{
     Bot.run({
-      command: "UtilityMC_checkOne",
-      run_after: index * 0.1,   // fastest safe stagger
-      options: { token: token, channel: ch }
+      command: "UtilityMC_checkNext",
+      run_after: 0.01,
+      options: { token: token }
     });
-  });
+  } catch(e){
+    // fallback: call fail callback
+    _safeFail({ joined: [], missing: _buildPayload({}).missing, multiple: session.multiple, passed: session.passed, forced: !!session.passed.forced });
+  }
 }
 
-/* ---------------------------------------------------------
-   checkOne → 1 channel per task
---------------------------------------------------------- */
-function UtilityMC_checkOne() {
-  try {
-    const token = options?.token;
-    const ch = options?.channel;
-    if (!token || !ch) return;
+/* ---------------- UtilityMC_checkNext (runs one channel) ---------------- */
+function UtilityMC_checkNext(){
+  try{
+    const opts = options || {};
+    const token = opts.token;
+    const session = User.getProperty(SES_KEY);
+    if(!session || session.token !== token) return;
 
+    const idx = session.index || 0;
+    const chats = session.chats || [];
+    if(idx >= chats.length){
+      // nothing to do
+      _finish();
+      return;
+    }
+
+    const ch = chats[idx];
+
+    // perform direct Api.getChatMember for this channel
     Api.getChatMember({
       chat_id: ch,
       user_id: user.telegramid,
       on_result: "UtilityMC_onOne",
-      on_error: "UtilityMC_onErr",
-      bb_options: { token: token, channel: ch }
+      on_error:  "UtilityMC_onErr",
+      bb_options: { token: token, channel: ch, index: idx }
     });
 
-  } catch (e) { try { throw e; } catch(err){} }
+  } catch(e){
+    // on error, fail safe
+    try{ throw e; } catch(err){}
+    const sessionTmp = User.getProperty(SES_KEY) || {};
+    _safeFail({ joined: [], missing: _buildPayload({}).missing, multiple: sessionTmp.multiple || false, passed: sessionTmp.passed || {}, forced: !!(sessionTmp.passed && sessionTmp.passed.forced) });
+  }
 }
 
-/* ---------------------------------------------------------
-   onOne / onErr — FINAL CALLBACKS
---------------------------------------------------------- */
-function UtilityMC_onOne() {
-  const session = User.getProperty(SES_KEY);
-  if (!session) return;
+/* ---------------- UtilityMC_onOne / _onErr ---------------- */
+function UtilityMC_onOne(){
+  try{
+    const sess = User.getProperty(SES_KEY);
+    if(!sess) return;
 
-  const bb = options.bb_options;
-  if (!bb || bb.token !== session.token) return;
+    const bb = options.bb_options;
+    if(!bb || bb.token !== sess.token) return;
 
-  const ch = bb.channel;
-  const status = options.result?.status;
-  const ok = ["member", "administrator", "creator"].includes(status);
+    const ch = bb.channel;
+    const ok = ["member","administrator","creator"].includes(options.result?.status);
 
-  session.results[ch] = ok;
-  session.pending--;
+    sess.results[ch] = ok;
 
-  User.setProperty(SES_KEY, session, "json");
+    // move to next
+    sess.index = (sess.index || 0) + 1;
 
-  if (session.pending <= 0) _finish();
+    User.setProperty(SES_KEY, sess, "json");
+
+    // schedule next check or finish
+    if(sess.index < (sess.chats || []).length){
+      Bot.run({
+        command: "UtilityMC_checkNext",
+        run_after: STAGGER * sess.index,
+        options: { token: sess.token }
+      });
+    } else {
+      _finish();
+    }
+
+  } catch(e){
+    try{ throw e; } catch(err){}
+  }
 }
 
-function UtilityMC_onErr() {
-  const session = User.getProperty(SES_KEY);
-  if (!session) return;
+function UtilityMC_onErr(){
+  try{
+    const sess = User.getProperty(SES_KEY);
+    if(!sess) return;
 
-  const bb = options.bb_options;
-  if (!bb || bb.token !== session.token) return;
+    const bb = options.bb_options;
+    if(!bb || bb.token !== sess.token) return;
 
-  const ch = bb.channel;
+    const ch = bb.channel;
+    sess.results[ch] = false;
 
-  session.results[ch] = false;
-  session.pending--;
+    // move to next
+    sess.index = (sess.index || 0) + 1;
+    User.setProperty(SES_KEY, sess, "json");
 
-  User.setProperty(SES_KEY, session, "json");
+    if(sess.index < (sess.chats || []).length){
+      Bot.run({
+        command: "UtilityMC_checkNext",
+        run_after: STAGGER * sess.index,
+        options: { token: sess.token }
+      });
+    } else {
+      _finish();
+    }
 
-  if (session.pending <= 0) _finish();
+  } catch(e){ try{ throw e; } catch(err){} }
 }
 
-/* ---------------------------------------------------------
-   Finalize Check
---------------------------------------------------------- */
-function _finish() {
-  const session = User.getProperty(SES_KEY);
-  if (!session) return;
+/* ---------------- Finish ---------------- */
+function _finish(){
+  const sess = User.getProperty(SES_KEY);
+  if(!sess) return;
 
   const panel = _panel();
 
-  const payload = _buildPayload(session.results);
-  payload.passed = session.passed || {};
-  payload.forced = !!session.passed.forced;
+  const payloadCore = _buildPayload(sess.results || {});
+  payloadCore.passed = sess.passed || {};
+  payloadCore.forced = !!(sess.passed && sess.passed.forced);
 
-  // Save user states
+  // save persistent states
   const st = {};
-  payload.joined.forEach(j => st[j.id] = true);
-  payload.missing.forEach(m => st[m.id] = false);
+  (payloadCore.joined || []).forEach(j => st[j.id] = true);
+  (payloadCore.missing || []).forEach(m => st[m.id] = false);
   _saveStates(st);
 
+  // clear session
   User.setProperty(SES_KEY, null);
 
-  // Run callbacks
+  // call correct callback
   try {
-    if (payload.missing.length === 0) {
-      if (panel.successCallback)
-        Bot.run({ command: panel.successCallback, options: payload });
+    if((payloadCore.missing || []).length === 0){
+      if(panel.successCallback) Bot.run({ command: panel.successCallback, options: payloadCore });
     } else {
-      if (panel.failCallback)
-        Bot.run({ command: panel.failCallback, options: payload });
+      if(panel.failCallback) Bot.run({ command: panel.failCallback, options: payloadCore });
     }
-  } catch (e) { try { throw e; } catch(err){} }
+  } catch(e){ try{ throw e; } catch(err){} }
 }
 
-/* ---------------------------------------------------------
-   Export API
---------------------------------------------------------- */
+/* ---------------- Export ---------------- */
 publish({
   mcSetup: mcSetup,
   mcCheck: mcCheck,
   isMember: isMember,
   mcGetChats: mcGetChats,
-  mcGetMissing: function(){ 
-    return _buildPayload(_getStates()).missing; 
-  }
+  mcGetMissing: mcGetMissing
 });
 
-/* ---------------------------------------------------------
-   Handler Registration
---------------------------------------------------------- */
-on("UtilityMC_checkOne", UtilityMC_checkOne);
+/* ---------------- Register handlers ---------------- */
+on("UtilityMC_checkNext", UtilityMC_checkNext);
 on("UtilityMC_onOne", UtilityMC_onOne);
 on("UtilityMC_onErr", UtilityMC_onErr);
