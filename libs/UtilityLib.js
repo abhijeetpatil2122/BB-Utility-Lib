@@ -1,355 +1,314 @@
 /*
- * UtilityLib v19.1 — Robust final
- * - Mode A (always re-check on mcCheck)
- * - Sequential checks, raw tg_status, source field
- * - Flexible AdminPanel discovery + normalized fields
- * - Publish: mcSetup, mcCheck, isMember, mcGetChats, mcGetMissing
+ * SimpleMC — Sequential Membership Checker (BB Compatible)
+ * Version: v2 — Admin Panel + Callbacks + isMember()
  */
 
-const PANEL_CANDIDATES = [
-  "UtilityMembershipPanel_v19",
-  "UtilityMembershipPanel",
-  "UtilityMembershipChecker",
-  "SimpleMembershipPanel_v18",
-  "SimpleMembershipPanel_v19",
-  "SimpleMembershipPanel"
-];
-
-const PREFIX = "UtilityMC_";
-const SESS_KEY = PREFIX + "session";
-const STATES_KEY = PREFIX + "states";
-
+const PREFIX = "SimpleMC_";
+const SESSION_KEY = PREFIX + "session";
 const MAX_CH = 10;
-const STAGGER = 0.1; // seconds between sequential checks
 
-/* ---------------- Admin panel creation (single canonical) ---------------- */
-function mcSetup() {
+/* ---------------- ADMIN PANEL ---------------- */
+
+function setup() {
   const panel = {
-    title: "Membership Checker v19",
-    description: "Public usernames + private id=link mapping, callbacks",
+    title: "Simple Membership Checker",
+    description: "Set channels & callbacks for SimpleMC",
     icon: "person-add",
+
     fields: [
-      { name: "publicChannels", title: "Public Channels (usernames)", type: "string", placeholder: "@ParadoxBackup, @Other", icon: "globe" },
-      { name: "privateChannels", title: "Private Channels (id=link)", type: "string", placeholder: "-100123=https://t.me/+invite", icon: "lock-closed" },
-      { name: "successCallback", title: "Success Callback", type: "string", placeholder: "/menu", icon: "checkmark" },
-      { name: "failCallback", title: "Fail Callback", type: "string", placeholder: "/start", icon: "warning" }
+      {
+        name: "public",
+        title: "Public Channels",
+        description: "Comma separated: @ch1, @ch2",
+        type: "string",
+        placeholder: "@channel1, @channel2",
+        icon: "chatbubbles"
+      },
+      {
+        name: "private",
+        title: "Private Channels",
+        description: "Format: id=link, id=link",
+        type: "string",
+        placeholder: "-1001000=https://t.me/+abc",
+        icon: "lock-closed"
+      },
+      {
+        name: "success",
+        title: "Success Callback",
+        type: "string",
+        placeholder: "/menu",
+        icon: "checkmark"
+      },
+      {
+        name: "fail",
+        title: "Fail Callback",
+        type: "string",
+        placeholder: "/start",
+        icon: "close"
+      }
     ]
   };
 
-  // create canonical panel name (first in candidates)
-  AdminPanel.setPanel({ panel_name: PANEL_CANDIDATES[0], data: panel });
-  Bot.sendMessage("Membership Checker panel installed as: " + PANEL_CANDIDATES[0] + "\nNow open Admin Panel > " + PANEL_CANDIDATES[0] + " and fill fields.");
-}
-
-/* ---------------- Utility: find and normalize admin panel values ---------------- */
-function _findPanelRaw() {
-  for (let i = 0; i < PANEL_CANDIDATES.length; i++) {
-    try {
-      const v = AdminPanel.getPanelValues(PANEL_CANDIDATES[i]);
-      if (v && Object.keys(v).length > 0) {
-        v.__panel_name = PANEL_CANDIDATES[i];
-        return v;
-      }
-    } catch (e) {
-      // ignore and continue
-    }
-  }
-  return null;
-}
-
-function _normalizePanel() {
-  // try to find panel under different names and normalize keys
-  const raw = _findPanelRaw();
-  if (!raw) return null;
-
-  const map = (k1, k2) => (raw[k1] !== undefined ? raw[k1] : (raw[k2] !== undefined ? raw[k2] : null));
-
-  return {
-    panel_name: raw.__panel_name || null,
-    publicChannels: map("publicChannels", "public_channels"),
-    privateChannels: map("privateChannels", "private_channels"),
-    successCallback: map("successCallback", "success_callback"),
-    failCallback: map("failCallback", "fail_callback"),
-    __raw: raw
-  };
-}
-
-/* ---------------- Channel parsing helpers ---------------- */
-function _parsePublicFromPanel(panel) {
-  if (!panel || !panel.publicChannels) return [];
-  return panel.publicChannels.split(",").map(s => s.trim()).filter(Boolean).slice(0, MAX_CH);
-}
-
-function _parsePrivateMapFromPanel(panel) {
-  const res = {};
-  if (!panel || !panel.privateChannels) return res;
-  panel.privateChannels.split(",").map(s => s.trim()).filter(Boolean).forEach(item => {
-    const eq = item.indexOf("=");
-    if (eq === -1) { res[item.trim()] = null; return; }
-    const id = item.slice(0, eq).trim();
-    const link = item.slice(eq + 1).trim();
-    res[id] = link || null;
-  });
-  return res;
-}
-
-/* ---------------- Public API helpers ---------------- */
-function _getPanelNormalizedOrThrow() {
-  const panel = _normalizePanel();
-  if (!panel) {
-    throw new Error("MembershipChecker: Admin Panel not found. Run /setupMC and configure the panel.");
-  }
-  return panel;
-}
-
-function mcGetChats() {
-  const panel = _normalizePanel();
-  if (!panel) return [];
-  const pub = _parsePublicFromPanel(panel);
-  const priv = Object.keys(_parsePrivateMapFromPanel(panel));
-  return pub.concat(priv).slice(0, MAX_CH);
-}
-
-/* ---------------- Persisted states ---------------- */
-function _getStates() { return User.getProperty(STATES_KEY) || {}; }
-function _saveStates(obj) { User.setProperty(STATES_KEY, obj, "json"); }
-
-/* ---------------- Build payload from results ----------------
-   resultsMap: { "<chat>": { ok:bool, tg_status: string|null, api_error:null|object, source: "fresh"|"cached" } }
-----------------------------------------------------------------*/
-function _buildPayloadFromResults(resultsMap) {
-  const panel = _normalizePanel();
-  if (!panel) return { joined: [], missing: [], errors: [], multiple: false }; // defensive
-  const pub = _parsePublicFromPanel(panel);
-  const priv = _parsePrivateMapFromPanel(panel);
-  const chats = mcGetChats();
-  const joined = [], missing = [], errors = [];
-
-  chats.forEach(ch => {
-    const r = resultsMap[ch] || { ok: false, tg_status: null, api_error: null, source: "cached" };
-    const link = pub.includes(ch) ? "https://t.me/" + ch.replace(/^@/, "") : (priv[ch] || null);
-    const item = { id: ch, join_link: link, tg_status: r.tg_status, source: r.source };
-
-    if (r.api_error) {
-      errors.push({ id: ch, join_link: link, api_error: r.api_error });
-    } else if (r.ok) {
-      joined.push(item);
-    } else {
-      missing.push(item);
-    }
+  AdminPanel.setPanel({
+    panel_name: "SimpleMC",
+    data: panel
   });
 
-  return { joined: joined, missing: missing, errors: errors, multiple: chats.length > 2 };
+  Bot.sendMessage("SimpleMC Panel Installed.");
 }
 
-/* Convenience: get missing based on persistent states */
-function mcGetMissing() {
-  const states = _getStates();
-  const map = {};
-  Object.keys(states).forEach(ch => {
-    map[ch] = { ok: !!states[ch], tg_status: states[ch] ? "member" : "left", api_error: null, source: "cached" };
-  });
-  return _buildPayloadFromResults(map).missing;
+function getPanel() {
+  return AdminPanel.getPanelValues("SimpleMC") || {};
 }
 
-/* ---------------- isMember() hybrid (Mode A logic) ----------------
- - If any cached false -> immediate fail callback and return false
- - Otherwise -> force a fresh mcCheck({ forced: true }) and return false
- - never returns true unless a fresh mcCheck succeeded and callback executed
-------------------------------------------------------------------*/
-function isMember() {
-  const panel = _normalizePanel();
-  if (!panel) { Bot.sendMessage("MembershipChecker: admin panel not found. Run /setupMC"); return false; }
+/* ---------------- CHANNEL PARSER ---------------- */
 
-  const channels = mcGetChats();
-  if (channels.length === 0) { Bot.sendMessage("❌ No channels configured."); return false; }
+function parseChannels() {
+  const cfg = getPanel();
+  let out = [];
 
-  const states = _getStates();
-  const cachedMissing = channels.filter(ch => states[ch] === false);
-
-  if (cachedMissing.length > 0) {
-    // fast fail using cached info
-    if (panel.failCallback) {
-      const map = {};
-      channels.forEach(ch => { map[ch] = { ok: !!states[ch], tg_status: states[ch] ? "member" : "left", api_error: null, source: "cached" }; });
-      const payload = _buildPayloadFromResults(map);
-      payload.passed = {}; payload.forced = false;
-      try { Bot.run({ command: panel.failCallback, options: payload }); } catch (e) { throw new Error("MembershipChecker: isMember fail callback run error: " + (e && e.message)); }
-    }
-    return false;
+  // public
+  if (cfg.public) {
+    cfg.public.split(",").forEach(v => {
+      v = v.trim();
+      if (v) out.push({ id: v, link: "https://t.me/" + v.replace("@", "") });
+    });
   }
 
-  // otherwise force fresh check and return false (developer must return)
-  mcCheck({ forced: true });
-  return false;
-}
-
-/* ---------------- mcCheck(passedOptions) Mode A - always recheck all channels ---------------- */
-function mcCheck(passedOptions) {
-  const panel = _normalizePanel();
-  if (!panel) { throw new Error("MembershipChecker: Admin Panel not found. Run /setupMC"); }
-
-  const allChats = mcGetChats();
-  if (allChats.length === 0) { Bot.sendMessage("❌ No channels configured."); return; }
-
-  if (!panel.successCallback || !panel.failCallback) {
-    // don't throw blindly — provide clear instruction
-    throw new Error("MembershipChecker: successCallback or failCallback is not set in Admin Panel. Open Admin Panel and fill callbacks.");
+  // private
+  if (cfg.private) {
+    cfg.private.split(",").forEach(v => {
+      v = v.trim();
+      if (!v) return;
+      const parts = v.split("=");
+      const id = parts[0];
+      const link = parts[1] || "";
+      out.push({ id: id, link: link });
+    });
   }
 
-  // Create fresh session to check ALL channels sequentially
-  const token = PREFIX + "t" + Date.now() + "_" + Math.floor(Math.random()*9999);
-  const session = {
-    token: token,
-    allChats: allChats.slice(), // copy
-    index: 0,
-    results: {}, // per-channel { ok, tg_status, api_error, source }
-    passed: passedOptions || {}
-  };
-  session.passed.multiple = allChats.length > 2;
-
-  User.setProperty(SESS_KEY, session, "json");
-
-  // schedule first sequential check
-  try {
-    Bot.run({ command: PREFIX + "checkNext", run_after: 0.01, options: { token: token } });
-  } catch (e) {
-    throw new Error("MembershipChecker: failed to schedule checks: " + (e && e.message));
+  if (out.length > MAX_CH) {
+    throw new Error("[SimpleMC] Max 10 channels allowed.");
   }
+
+  return out;
 }
 
-/* ---------- Sequential check step ---------- */
-function UtilityMC_checkNext() {
-  try {
-    const opt = options || {};
-    const token = opt.token;
-    if (!token) return;
-    const sess = User.getProperty(SESS_KEY);
-    if (!sess || sess.token !== token) return;
+/* ---------------- HELPER: FINAL RESULT BUILDER ---------------- */
 
-    const idx = sess.index || 0;
-    const list = sess.allChats || [];
-    if (idx >= list.length) {
-      _finalizeSession();
+function buildResult(results, channels, passed) {
+  let joined = [];
+  let left = [];
+  let invalid = [];
+  let details = [];
+
+  channels.forEach(ch => {
+    let r = results[ch.id];
+    if (!r) {
+      invalid.push(ch);
       return;
     }
 
-    const ch = list[idx];
+    details.push(r);
 
-    Api.getChatMember({
-      chat_id: ch,
-      user_id: user.telegramid,
-      on_result: PREFIX + "onOne",
-      on_error: PREFIX + "onErr",
-      bb_options: { token: token, channel: ch }
-    });
-
-  } catch (e) {
-    throw new Error("MembershipChecker: checkNext failed: " + (e && e.message));
-  }
-}
-on(PREFIX + "checkNext", UtilityMC_checkNext);
-
-/* ---------- API success handler ---------- */
-function UtilityMC_onOne() {
-  try {
-    const sess = User.getProperty(SESS_KEY);
-    if (!sess) return;
-    const bb = options.bb_options;
-    if (!bb || bb.token !== sess.token) return;
-
-    const ch = bb.channel;
-    const tg_status = options.result?.status || null; // raw TG status
-    const ok = ["member","administrator","creator"].includes(tg_status);
-
-    sess.results[ch] = { ok: !!ok, tg_status: tg_status, api_error: null, source: "fresh" };
-
-    sess.index = (sess.index || 0) + 1;
-    User.setProperty(SESS_KEY, sess, "json");
-
-    if (sess.index < (sess.allChats || []).length) {
-      Bot.run({ command: PREFIX + "checkNext", run_after: STAGGER, options: { token: sess.token } });
-    } else {
-      _finalizeSession();
+    if (r.api_error) {
+      invalid.push(ch);
+      return;
     }
-  } catch (e) {
-    throw new Error("MembershipChecker: onOne error: " + (e && e.message));
-  }
-}
-on(PREFIX + "onOne", UtilityMC_onOne);
 
-/* ---------- API error handler ---------- */
-function UtilityMC_onErr() {
-  try {
-    const sess = User.getProperty(SESS_KEY);
-    if (!sess) return;
-    const bb = options.bb_options;
-    if (!bb || bb.token !== sess.token) return;
-
-    const ch = bb.channel;
-    const api_error = options || { message: "Unknown API error" };
-
-    sess.results[ch] = { ok: false, tg_status: null, api_error: api_error, source: "fresh" };
-
-    sess.index = (sess.index || 0) + 1;
-    User.setProperty(SESS_KEY, sess, "json");
-
-    if (sess.index < (sess.allChats || []).length) {
-      Bot.run({ command: PREFIX + "checkNext", run_after: STAGGER, options: { token: sess.token } });
+    const st = r.status;
+    if (["member", "administrator", "creator"].includes(st)) {
+      joined.push(ch);
     } else {
-      _finalizeSession();
+      left.push(ch);
     }
-  } catch (e) {
-    throw new Error("MembershipChecker: onErr error: " + (e && e.message));
-  }
-}
-on(PREFIX + "onErr", UtilityMC_onErr);
-
-/* ---------- Finalize: build payload, persist safe states, call callbacks ---------- */
-function _finalizeSession() {
-  const sess = User.getProperty(SESS_KEY);
-  if (!sess) return;
-
-  const merged = {};
-  (sess.allChats || []).forEach(ch => {
-    if (sess.results && sess.results[ch]) merged[ch] = sess.results[ch];
-    else merged[ch] = { ok: false, tg_status: null, api_error: null, source: "fresh" };
   });
 
-  const payload = _buildPayloadFromResults(merged);
-  payload.passed = sess.passed || {};
-  payload.forced = !!(sess.passed && sess.passed.forced);
+  return {
+    joined: joined,
+    missing: left.concat(invalid),
+    invalid: invalid,
+    left: left,
 
-  payload.status = (payload.errors && payload.errors.length > 0) ? "error" : (payload.missing && payload.missing.length > 0 ? "missing" : "ok");
+    details: details,
 
-  // persist states when no api_error
-  const persistent = _getStates();
-  Object.keys(merged).forEach(ch => {
-    const r = merged[ch];
-    if (r.api_error) return;
-    persistent[ch] = !!r.ok;
-  });
-  _saveStates(persistent);
+    all_joined: (left.length === 0 && invalid.length === 0),
 
-  // clear session
-  User.setProperty(SESS_KEY, null);
+    multiple: channels.length > 1,
+    channels: channels,
 
-  // call callback
-  const panel = _normalizePanel();
-  try {
-    if (!panel) throw new Error("MembershipChecker: panel missing at finalize (unexpected).");
-    if (payload.status === "ok") Bot.run({ command: panel.successCallback, options: payload });
-    else Bot.run({ command: panel.failCallback, options: payload });
-  } catch (e) {
-    throw new Error("MembershipChecker: finalize callback run failed: " + (e && e.message));
-  }
+    passed: passed || {},
+    forced: false
+  };
 }
 
-/* ---------- Export API ---------- */
+/* ---------------- PUBLIC API ---------------- */
+
+function mcCheck(passed) {
+  const cfg = getPanel();
+  if (!cfg.success || !cfg.fail) {
+    throw new Error("[SimpleMC] Please set success & fail callback in Panel.");
+  }
+
+  const channels = parseChannels();
+  if (channels.length === 0) throw new Error("[SimpleMC] No channels set.");
+
+  const token = PREFIX + Date.now() + "_" + Math.floor(Math.random() * 9999);
+
+  const session = {
+    token: token,
+    list: channels,
+    index: 0,
+    results: {},
+    success: cfg.success,
+    fail: cfg.fail,
+    passed: passed || {}
+  };
+
+  User.setProperty(SESSION_KEY, session, "json");
+
+  Bot.run({
+    command: PREFIX + "next",
+    options: { token: token },
+    run_after: 0.05
+  });
+}
+
+function mcGetChats() {
+  return parseChannels();
+}
+
+function mcGetMissing() {
+  const session = User.getProperty(SESSION_KEY);
+  if (!session) return [];
+  let out = [];
+  Object.keys(session.results).forEach(c => {
+    let r = session.results[c];
+    if (!r.ok) out.push(c);
+  });
+  return out;
+}
+
+/* ---------------- isMember() ---------------- */
+
+function isMember() {
+  const session = User.getProperty(SESSION_KEY);
+
+  // No session => we must check
+  if (!session) {
+    mcCheck({ forced: true });
+    return false;
+  }
+
+  // If any cached result says not joined ⇒ fail immediately
+  const channels = parseChannels();
+  for (let ch of channels) {
+    const r = session.results[ch.id];
+    if (!r || !r.ok) {
+      mcCheck({ forced: true });
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/* ---------------- ENGINE: NEXT STEP ---------------- */
+
+function next() {
+  const opt = options || {};
+  const token = opt.token;
+
+  const session = User.getProperty(SESSION_KEY);
+  if (!session || session.token !== token) return;
+
+  const idx = session.index;
+  const list = session.list;
+
+  if (idx >= list.length) return finalize();
+
+  const ch = list[idx].id;
+
+  Api.getChatMember({
+    chat_id: ch,
+    user_id: user.telegramid,
+    on_result: PREFIX + "one",
+    on_error: PREFIX + "err",
+    bb_options: { token: token, ch: ch }
+  });
+}
+
+function one() {
+  const bb = options.bb_options;
+  if (!bb) return;
+
+  const session = User.getProperty(SESSION_KEY);
+  if (!session || session.token !== bb.token) return;
+
+  const st = options.result?.status || null;
+
+  session.results[bb.ch] = {
+    channel: bb.ch,
+    ok: ["member", "administrator", "creator"].includes(st),
+    status: st,
+    api_error: null,
+    source: "fresh"
+  };
+
+  session.index++;
+  User.setProperty(SESSION_KEY, session, "json");
+
+  Bot.run({ command: PREFIX + "next", options: { token: bb.token }, run_after: 0.05 });
+}
+
+function err() {
+  const bb = options.bb_options;
+  if (!bb) return;
+
+  const session = User.getProperty(SESSION_KEY);
+  if (!session || session.token !== bb.token) return;
+
+  session.results[bb.ch] = {
+    channel: bb.ch,
+    ok: false,
+    status: null,
+    api_error: options || {},
+    source: "fresh"
+  };
+
+  session.index++;
+  User.setProperty(SESSION_KEY, session, "json");
+
+  Bot.run({ command: PREFIX + "next", options: { token: bb.token }, run_after: 0.05 });
+}
+
+/* ---------------- FINALIZE ---------------- */
+
+function finalize() {
+  const session = User.getProperty(SESSION_KEY);
+  if (!session) return;
+
+  const result = buildResult(session.results, session.list, session.passed);
+
+  User.setProperty(SESSION_KEY, null);
+
+  const cmd = result.all_joined ? session.success : session.fail;
+
+  Bot.run({
+    command: cmd,
+    options: result
+  });
+}
+
+/* ---------------- EXPORT ---------------- */
 publish({
-  mcSetup: mcSetup,
+  mcSetup: setup,
   mcCheck: mcCheck,
-  isMember: isMember,
   mcGetChats: mcGetChats,
-  mcGetMissing: mcGetMissing
+  mcGetMissing: mcGetMissing,
+  isMember: isMember
 });
+
+on(PREFIX + "next", next);
+on(PREFIX + "one", one);
+on(PREFIX + "err", err);
