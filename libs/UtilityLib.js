@@ -1,65 +1,42 @@
 /*
- * UtilityLib v18.2 — Final stable
- * - Sequential, cached, raw tg_status, source field ("fresh"|"cached")
- * - Admin panel: SimpleMembershipPanel_v18
- * - Public API: mcSetup, mcCheck, isMember, mcGetChats, mcGetMissing
+ * UtilityLib v19 — Final (Mode A: always re-check on mcCheck)
+ * - Sequential checks (MCL-style)
+ * - isMember() forces fresh mcCheck unless cached false
+ * - Raw Telegram statuses in tg_status
+ * - source: "fresh" | "cached"
+ * - Callbacks always receive full payload
  */
 
-const PANEL = "SimpleMembershipPanel_v18";
+/* ---------- Constants ---------- */
+const PANEL_NAME = "UtilityMembershipPanel_v19";
 const PREFIX = "UtilityMC_";
-const SES_KEY = PREFIX + "session";
+const SESS_KEY = PREFIX + "session";
 const STATES_KEY = PREFIX + "states";
 
 const MAX_CH = 10;
-const STAGGER = 0.1; // seconds between sequential checks
+const STAGGER = 0.1; // seconds between each sequential check
 
-/* ---------------- Admin panel setup ---------------- */
+/* ---------- Admin panel ---------- */
 function mcSetup() {
   const panel = {
-    title: "Membership Checker v18.2",
+    title: "Membership Checker v19",
     description: "Public usernames + private id=link mapping, callbacks",
     icon: "person-add",
     fields: [
-      {
-        name: "publicChannels",
-        title: "Public Channels (usernames)",
-        description: "Comma-separated, e.g. @ParadoxBackup",
-        type: "string",
-        placeholder: "@ParadoxBackup, @Other",
-        icon: "globe"
-      },
-      {
-        name: "privateChannels",
-        title: "Private Channels (id=link)",
-        description: "Comma-separated, e.g. -100123=https://t.me/+invite",
-        type: "string",
-        placeholder: "-100123=https://t.me/+invite",
-        icon: "lock-closed"
-      },
-      {
-        name: "successCallback",
-        title: "Success Callback",
-        type: "string",
-        placeholder: "/menu",
-        icon: "checkmark"
-      },
-      {
-        name: "failCallback",
-        title: "Fail Callback",
-        type: "string",
-        placeholder: "/start",
-        icon: "warning"
-      }
+      { name: "publicChannels", title: "Public Channels (usernames)", type: "string", placeholder: "@ParadoxBackup, @Other", icon: "globe" },
+      { name: "privateChannels", title: "Private Channels (id=link)", type: "string", placeholder: "-100123=https://t.me/+invite", icon: "lock-closed" },
+      { name: "successCallback", title: "Success Callback", type: "string", placeholder: "/menu", icon: "checkmark" },
+      { name: "failCallback", title: "Fail Callback", type: "string", placeholder: "/start", icon: "warning" }
     ]
   };
 
-  AdminPanel.setPanel({ panel_name: PANEL, data: panel });
-  Bot.sendMessage("Membership Checker v18.2 panel created.");
+  AdminPanel.setPanel({ panel_name: PANEL_NAME, data: panel });
+  Bot.sendMessage("Membership Checker v19 panel created.");
 }
 
-function _panel() { return AdminPanel.getPanelValues(PANEL) || {}; }
+/* ---------- Panel helpers ---------- */
+function _panel() { return AdminPanel.getPanelValues(PANEL_NAME) || {}; }
 
-/* ---------------- Parsers ---------------- */
 function _parsePublic() {
   const p = _panel();
   if (!p.publicChannels) return [];
@@ -80,23 +57,22 @@ function _parsePrivateMap() {
   return out;
 }
 
+/* Return array of channel ids (public usernames + private ids) */
 function mcGetChats() {
-  const pub = _parsePublic();
-  const priv = Object.keys(_parsePrivateMap());
-  return pub.concat(priv).slice(0, MAX_CH);
+  return _parsePublic().concat(Object.keys(_parsePrivateMap())).slice(0, MAX_CH);
 }
 
-/* ---------------- State storage ---------------- */
-function _getStates() { return User.getProperty(STATES_KEY) || {}; }
+/* ---------- Persistent states (per-user) ---------- */
+function _getStates() { return User.getProperty(STATES_KEY) || {}; } // { "<chat>": true|false }
 function _saveStates(obj) { User.setProperty(STATES_KEY, obj, "json"); }
 
-/* ---------------- Build payload ---------------- */
-/* resultsMap: { "<chat>": { ok:bool, tg_status: string|null, api_error: object|null, source: "fresh"|"cached" } } */
+/* ---------- Build payload from results map ----------
+   resultsMap: { "<chat>": { ok:bool, tg_status: string|null, api_error:null|object, source:"fresh"|"cached" } }
+------------------------------------------------------*/
 function _buildPayloadFromResults(resultsMap) {
   const pub = _parsePublic();
   const priv = _parsePrivateMap();
   const chats = mcGetChats();
-
   const joined = [], missing = [], errors = [];
 
   chats.forEach(ch => {
@@ -116,7 +92,7 @@ function _buildPayloadFromResults(resultsMap) {
   return { joined: joined, missing: missing, errors: errors, multiple: chats.length > 2 };
 }
 
-/* enriched missing helper */
+/* Convenience: returns missing list based on cached states (enriched) */
 function mcGetMissing() {
   const states = _getStates();
   const map = {};
@@ -126,108 +102,84 @@ function mcGetMissing() {
   return _buildPayloadFromResults(map).missing;
 }
 
-/* ---------------- safe fail wrapper ---------------- */
-function _safeRunFail(payload) {
-  const p = _panel();
-  if (!p.failCallback) return;
-  try { Bot.run({ command: p.failCallback, options: payload }); } catch (e) { throw new Error("UtilityLib v18.2: fail callback run error: " + (e && e.message)); }
-}
-
-/* ---------------- isMember (hybrid strict) ----------------
- - All cached true -> true
- - Any cached false -> call fail callback with cache payload and return false
- - Any unknown -> call mcCheck({forced: true}) and return false
-----------------------------------------------------------------*/
+/* ---------- isMember() — hybrid strict ----------
+   - If any cached false -> run fail callback with cached payload and return false
+   - Otherwise -> force mcCheck({ forced: true }) and return false
+   - Never return true unless a fresh check has just finished successfully
+---------------------------------------------------*/
 function isMember() {
+  const panel = _panel();
   const channels = mcGetChats();
   if (channels.length === 0) { Bot.sendMessage("❌ No channels configured in panel."); return false; }
 
   const states = _getStates();
-  const panel = _panel();
-
-  // unknowns? -> force fresh check
-  const unknown = channels.filter(ch => (states[ch] === undefined));
-  if (unknown.length > 0) {
-    mcCheck({ forced: true });
-    return false;
-  }
-
-  // any cached false? -> fail callback with cached payload
-  const cachedMissing = channels.filter(ch => states[ch] !== true);
+  // If any cached false -> immediate fail (fast)
+  const cachedMissing = channels.filter(ch => states[ch] === false);
   if (cachedMissing.length > 0) {
     if (panel.failCallback) {
       const map = {};
       channels.forEach(ch => { map[ch] = { ok: !!states[ch], tg_status: states[ch] ? "member" : "left", api_error: null, source: "cached" }; });
       const payload = _buildPayloadFromResults(map);
       payload.passed = {}; payload.forced = false;
-      try { Bot.run({ command: panel.failCallback, options: payload }); } catch (e) { throw new Error("UtilityLib v18.2: isMember fail run error: " + (e && e.message)); }
+      try { Bot.run({ command: panel.failCallback, options: payload }); } catch (e) { throw new Error("UtilityLib v19: isMember fail callback run error: " + (e && e.message)); }
     }
     return false;
   }
 
-  return true;
+  // otherwise force fresh check (never assume cached true)
+  mcCheck({ forced: true });
+  return false;
 }
 
-/* ---------------- mcCheck(passedOptions) ----------------
- - Check only channels that are not cached true (speed)
- - Sequential checking of must-check list
- - Builds session stored in USER session key
-----------------------------------------------------------------*/
+/* ---------- mcCheck(passedOptions) ----------
+   Mode A: Always re-check ALL channels sequentially (no skipping).
+   Creates session and starts sequential check.
+-----------------------------------------------*/
 function mcCheck(passedOptions) {
   const panel = _panel();
   const allChats = mcGetChats();
-  if (!panel.successCallback || !panel.failCallback) { throw new Error("Please set successCallback and failCallback in Admin Panel."); }
-  if (allChats.length === 0) { Bot.sendMessage("❌ No channels configured in panel."); return; }
 
-  const states = _getStates();
-  const mustCheck = allChats.filter(ch => states[ch] !== true);
+  if (!panel.successCallback || !panel.failCallback) {
+    throw new Error("UtilityLib v19: please set successCallback and failCallback in Admin Panel");
+  }
 
-  // immediate success if nothing to check
-  if (mustCheck.length === 0) {
-    // build payload from cache
-    const map = {};
-    allChats.forEach(ch => { map[ch] = { ok: !!states[ch], tg_status: states[ch] ? "member" : "left", api_error: null, source: "cached" }; });
-    const payload = _buildPayloadFromResults(map);
-    payload.passed = passedOptions || {}; payload.passed.multiple = allChats.length > 2;
-    payload.forced = !!(passedOptions && passedOptions.forced);
-    try { Bot.run({ command: panel.successCallback, options: payload }); } catch (e) { throw new Error("UtilityLib v18.2: mcCheck immediate success run error: " + (e && e.message)); }
+  if (allChats.length === 0) {
+    Bot.sendMessage("❌ No channels configured in admin panel.");
     return;
   }
 
-  // create session
+  // Session: will check all chats (Mode A)
   const token = PREFIX + "t" + Date.now() + "_" + Math.floor(Math.random() * 9999);
   const session = {
     token: token,
-    allChats: allChats,
-    toCheck: mustCheck,
-    index: 0,
-    results: {}, // per-channel result objects with ok,tg_status,api_error,source
+    allChats: allChats,    // all channel ids to check
+    index: 0,              // current index
+    results: {},           // results map populated per-channel
     passed: passedOptions || {}
   };
-  session.passed = session.passed || {};
   session.passed.multiple = allChats.length > 2;
 
-  User.setProperty(SES_KEY, session, "json");
+  User.setProperty(SESS_KEY, session, "json");
 
-  // schedule first check step
+  // schedule first sequential check
   try {
     Bot.run({ command: PREFIX + "checkNext", run_after: 0.01, options: { token: token } });
   } catch (e) {
-    throw new Error("UtilityLib v18.2: mcCheck schedule failed: " + (e && e.message));
+    throw new Error("UtilityLib v19: failed to schedule checks: " + (e && e.message));
   }
 }
 
-/* ---------------- Sequential next check handler ---------------- */
+/* ---------- Sequential check step ---------- */
 function UtilityMC_checkNext() {
   try {
-    const opts = options || {};
-    const token = opts.token;
+    const opt = options || {};
+    const token = opt.token;
     if (!token) return;
-    const sess = User.getProperty(SES_KEY);
+    const sess = User.getProperty(SESS_KEY);
     if (!sess || sess.token !== token) return;
 
     const idx = sess.index || 0;
-    const list = sess.toCheck || [];
+    const list = sess.allChats || [];
     if (idx >= list.length) {
       _finalizeSession();
       return;
@@ -244,43 +196,43 @@ function UtilityMC_checkNext() {
     });
 
   } catch (e) {
-    throw new Error("UtilityLib v18.2: checkNext failed: " + (e && e.message));
+    throw new Error("UtilityLib v19: checkNext failed: " + (e && e.message));
   }
 }
 on(PREFIX + "checkNext", UtilityMC_checkNext);
 
-/* ---------------- Api success handler ---------------- */
+/* ---------- API result handler ---------- */
 function UtilityMC_onOne() {
   try {
-    const sess = User.getProperty(SES_KEY);
+    const sess = User.getProperty(SESS_KEY);
     if (!sess) return;
     const bb = options.bb_options;
     if (!bb || bb.token !== sess.token) return;
 
     const ch = bb.channel;
-    const tg_status = options.result?.status || null;
+    const tg_status = options.result?.status || null; // raw TG status
     const ok = ["member", "administrator", "creator"].includes(tg_status);
 
     sess.results[ch] = { ok: !!ok, tg_status: tg_status, api_error: null, source: "fresh" };
 
     sess.index = (sess.index || 0) + 1;
-    User.setProperty(SES_KEY, sess, "json");
+    User.setProperty(SESS_KEY, sess, "json");
 
-    if (sess.index < (sess.toCheck || []).length) {
+    if (sess.index < (sess.allChats || []).length) {
       Bot.run({ command: PREFIX + "checkNext", run_after: STAGGER, options: { token: sess.token } });
     } else {
       _finalizeSession();
     }
   } catch (e) {
-    throw new Error("UtilityLib v18.2: onOne error: " + (e && e.message));
+    throw new Error("UtilityLib v19: onOne error: " + (e && e.message));
   }
 }
 on(PREFIX + "onOne", UtilityMC_onOne);
 
-/* ---------------- Api error handler ---------------- */
+/* ---------- API error handler ---------- */
 function UtilityMC_onErr() {
   try {
-    const sess = User.getProperty(SES_KEY);
+    const sess = User.getProperty(SESS_KEY);
     if (!sess) return;
     const bb = options.bb_options;
     if (!bb || bb.token !== sess.token) return;
@@ -291,70 +243,64 @@ function UtilityMC_onErr() {
     sess.results[ch] = { ok: false, tg_status: null, api_error: api_error, source: "fresh" };
 
     sess.index = (sess.index || 0) + 1;
-    User.setProperty(SES_KEY, sess, "json");
+    User.setProperty(SESS_KEY, sess, "json");
 
-    if (sess.index < (sess.toCheck || []).length) {
+    if (sess.index < (sess.allChats || []).length) {
       Bot.run({ command: PREFIX + "checkNext", run_after: STAGGER, options: { token: sess.token } });
     } else {
       _finalizeSession();
     }
   } catch (e) {
-    throw new Error("UtilityLib v18.2: onErr error: " + (e && e.message));
+    throw new Error("UtilityLib v19: onErr error: " + (e && e.message));
   }
 }
 on(PREFIX + "onErr", UtilityMC_onErr);
 
-/* ---------------- Finalize session: merge results, persist safe states, call callbacks ---------------- */
+/* ---------- Finalize session: merge results, persist safe states, call callbacks ---------- */
 function _finalizeSession() {
-  const sess = User.getProperty(SES_KEY);
+  const sess = User.getProperty(SESS_KEY);
   if (!sess) return;
   const panel = _panel();
 
-  // Build merged results covering allChats
+  // Build merged map: prefer fresh results from sess.results; no fallback to cached here
   const merged = {};
   (sess.allChats || []).forEach(ch => {
     if (sess.results && sess.results[ch]) merged[ch] = sess.results[ch];
-    else {
-      // fallback to cached state if exists, else unknown -> treat as not joined
-      const cached = _getStates();
-      if (cached[ch] === true) merged[ch] = { ok: true, tg_status: "member", api_error: null, source: "cached" };
-      else if (cached[ch] === false) merged[ch] = { ok: false, tg_status: "left", api_error: null, source: "cached" };
-      else merged[ch] = { ok: false, tg_status: null, api_error: null, source: "cached" };
-    }
+    else merged[ch] = { ok: false, tg_status: null, api_error: null, source: "fresh" }; // shouldn't happen
   });
 
-  const payloadCore = _buildPayloadFromResults(merged);
-  payloadCore.passed = sess.passed || {};
-  payloadCore.forced = !!(sess.passed && sess.passed.forced);
+  const core = _buildPayloadFromResults(merged);
+  core.passed = sess.passed || {};
+  core.forced = !!(sess.passed && sess.passed.forced);
 
-  // set status
+  // status resolution
   let status = "ok";
-  if (payloadCore.errors && payloadCore.errors.length > 0) status = "error";
-  else if (payloadCore.missing && payloadCore.missing.length > 0) status = "missing";
-  payloadCore.status = status;
+  if (core.errors && core.errors.length > 0) status = "error";
+  else if (core.missing && core.missing.length > 0) status = "missing";
+  core.status = status;
 
-  // persist safe states (do NOT overwrite when api_error present)
+  // persist definitive states (no api_error)
   const persistent = _getStates();
   Object.keys(merged).forEach(ch => {
     const r = merged[ch];
-    if (r.api_error) return; // skip
+    if (r.api_error) return; // do not overwrite persistent when api error occurred
     persistent[ch] = !!r.ok;
   });
   _saveStates(persistent);
 
   // clear session
-  User.setProperty(SES_KEY, null);
+  User.setProperty(SESS_KEY, null);
 
-  // call callback (success if ok else fail)
+  // call appropriate callback
   try {
-    if (status === "ok") Bot.run({ command: panel.successCallback, options: payloadCore });
-    else Bot.run({ command: panel.failCallback, options: payloadCore });
+    if (status === "ok") Bot.run({ command: panel.successCallback, options: core });
+    else Bot.run({ command: panel.failCallback, options: core });
   } catch (e) {
-    throw new Error("UtilityLib v18.2: finalize callback run failed: " + (e && e.message));
+    throw new Error("UtilityLib v19: callback run failed: " + (e && e.message));
   }
 }
 
-/* ---------------- Export API ---------------- */
+/* ---------- Export API ---------- */
 publish({
   mcSetup: mcSetup,
   mcCheck: mcCheck,
