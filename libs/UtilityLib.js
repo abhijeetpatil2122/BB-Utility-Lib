@@ -1,264 +1,221 @@
-/*
- * SimpleMC v2.1 — Final fixes
- * - Admin panel included (panel name: "SimpleMC")
- * - Exports: mcSetup, mcCheck, mcGetChats, mcGetMissing, isMember
- * - Sequential checking, no async/await, max 10 channels
- */
+// MyMCL - Simple & Powerful Membership Checker
+// Inspired by BB MCL but much simpler
 
-const PREFIX = "SimpleMC_";
-const SESSION_KEY = PREFIX + "session";
-const STATES_KEY = PREFIX + "states";
-const PANEL_NAME = "SimpleMC";
-const MAX_CH = 10;
-const STAGGER = 0.1;
+const PREFIX = "MyMCL_";
 
-/* ---------------- Admin Panel Setup ---------------- */
-function mcSetup() {
-  const panel = {
-    title: "Simple Membership Checker",
-    description: "Configure public usernames, private id=link and callbacks",
-    icon: "person-add",
-    fields: [
-      { name: "public", title: "Public Channels", type: "string", placeholder: "@ParadoxBackup, @Other", icon: "globe" },
-      { name: "private", title: "Private Channels (id=link)", type: "string", placeholder: "-100123=https://t.me/+invite", icon: "lock-closed" },
-      { name: "success", title: "Success Callback", type: "string", placeholder: "/menu", icon: "checkmark" },
-      { name: "fail", title: "Fail Callback", type: "string", placeholder: "/start", icon: "warning" }
-    ]
-  };
+// -------------------------
+// ADMIN PANEL
+// -------------------------
+function setup(){
+  AdminPanel.setPanel({
+    panel_name: "MyMCL",
+    data: {
+      title: "My Membership Checker",
+      description: "Simple & powerful membership checker",
+      icon: "person-add",
 
-  AdminPanel.setPanel({ panel_name: PANEL_NAME, data: panel });
-  Bot.sendMessage("SimpleMC: Admin Panel created. Open Admin Panel > SimpleMC and fill fields.");
-}
-
-/* ---------------- Helpers ---------------- */
-function _getPanel() {
-  return AdminPanel.getPanelValues(PANEL_NAME) || {};
-}
-
-function _parseChannelsFromPanel() {
-  const cfg = _getPanel();
-  const out = [];
-
-  if (cfg.public) {
-    cfg.public.split(",").forEach(s => {
-      s = s.trim();
-      if (!s) return;
-      out.push({ id: s, join_link: "https://t.me/" + s.replace(/^@/, "") });
-    });
-  }
-
-  if (cfg.private) {
-    cfg.private.split(",").forEach(s => {
-      s = s.trim();
-      if (!s) return;
-      const parts = s.split("=");
-      const id = parts[0].trim();
-      const link = (parts[1] || "").trim();
-      out.push({ id: id, join_link: link || null });
-    });
-  }
-
-  if (out.length > MAX_CH) {
-    throw new Error("[SimpleMC] Max " + MAX_CH + " channels allowed.");
-  }
-  return out;
-}
-
-function _getStates() { return User.getProperty(STATES_KEY) || {}; }
-function _saveStates(obj) { User.setProperty(STATES_KEY, obj, "json"); }
-
-/* resultsMap: { "<id>": { ok:bool, status:string|null, api_error:null|obj, source:"fresh"|"cached" } } */
-function _buildPayload(resultsMap, channels, passed) {
-  const joined = [], missing = [], invalid = [], details = [];
-
-  channels.forEach(ch => {
-    const r = resultsMap[ch.id] || { ok: false, status: null, api_error: null, source: "fresh" };
-    details.push(Object.assign({ id: ch.id, join_link: ch.join_link }, r));
-    if (r.api_error) invalid.push({ id: ch.id, join_link: ch.join_link, api_error: r.api_error });
-    else if (["member", "administrator", "creator"].includes(r.status)) joined.push({ id: ch.id, join_link: ch.join_link, tg_status: r.status, source: r.source });
-    else missing.push({ id: ch.id, join_link: ch.join_link, tg_status: r.status, source: r.source });
-  });
-
-  return {
-    joined: joined,
-    missing: missing,
-    invalid: invalid,
-    details: details,
-    all_joined: (missing.length === 0 && invalid.length === 0),
-    multiple: channels.length > 1,
-    channels: channels,
-    passed: passed || {},
-    forced: !!(passed && passed.forced)
-  };
-}
-
-/* ---------------- Public API: mcCheck ----------------
-   Mode A: always re-check all channels sequentially
-   Usage: Libs.SimpleMC.mcCheck({ any: "data" })
-   Panel must contain success & fail callback names.
-*/
-function mcCheck(passedOptions) {
-  const panel = _getPanel();
-  if (!panel) throw new Error("[SimpleMC] Admin Panel not found. Run /setupMC and configure.");
-  if (!panel.success || !panel.fail) throw new Error("[SimpleMC] Please set success and fail callbacks in Admin Panel.");
-
-  const channels = _parseChannelsFromPanel();
-  if (!channels || channels.length === 0) throw new Error("[SimpleMC] No channels configured in Admin Panel.");
-
-  const token = PREFIX + "t" + Date.now() + "_" + Math.floor(Math.random() * 9999);
-  const session = {
-    token: token,
-    channels: channels,
-    index: 0,
-    results: {},
-    passed: passedOptions || {}
-  };
-
-  User.setProperty(SESSION_KEY, session, "json");
-
-  Bot.run({ command: PREFIX + "checkNext", options: { token: token }, run_after: 0.01 });
-}
-
-/* exact old-name compatibility */
-function mcGetChats() { return _parseChannelsFromPanel(); }
-function mcGetMissing() {
-  const states = _getStates();
-  const list = [];
-  const chs = _parseChannelsFromPanel();
-  chs.forEach(ch => { if (!states[ch.id]) list.push(ch.id); });
-  return list;
-}
-
-/* ---------------- isMember (hybrid strict) ----------------
-   - If any cached false => run fail callback immediately and return false
-   - Else => force fresh mcCheck({ forced: true }) and return false
-   - Never returns true unless fresh check passed
-*/
-function isMember() {
-  const panel = _getPanel();
-  if (!panel) { Bot.sendMessage("[SimpleMC] Panel not found. Run /setupMC"); return false; }
-  const channels = _parseChannelsFromPanel();
-  if (channels.length === 0) { Bot.sendMessage("[SimpleMC] No channels configured."); return false; }
-
-  const states = _getStates();
-  const cachedMissing = channels.filter(ch => states[ch.id] === false);
-  if (cachedMissing.length > 0) {
-    // Build cached payload and call fail
-    const resultsMap = {};
-    channels.forEach(ch => { resultsMap[ch.id] = { ok: !!states[ch.id], status: states[ch.id] ? "member" : "left", api_error: null, source: "cached" }; });
-    const payload = _buildPayload(resultsMap, channels, {});
-    try { Bot.run({ command: panel.fail, options: payload }); } catch (e) { throw new Error("[SimpleMC] isMember fail run error: " + (e && e.message)); }
-    return false;
-  }
-
-  // Force fresh check
-  mcCheck({ forced: true });
-  return false;
-}
-
-/* ---------------- Sequential engine handlers ---------------- */
-
-function SimpleMC_checkNext() {
-  try {
-    const opt = options || {};
-    const token = opt.token;
-    if (!token) return;
-
-    const session = User.getProperty(SESSION_KEY);
-    if (!session || session.token !== token) return;
-
-    const idx = session.index || 0;
-    const list = session.channels || [];
-
-    if (idx >= list.length) {
-      return SimpleMC_finalize();
+      fields: [
+        {
+          name: "chats",
+          title: "Chats for checking",
+          description: "Separate with commas",
+          type: "string",
+          placeholder: "@channel1, @channel2"
+        },
+        {
+          name: "onSuccess",
+          title: "Success command",
+          description: "When user is member of ALL channels",
+          type: "string",
+          placeholder: "/joined"
+        },
+        {
+          name: "onFail",
+          title: "Fail command",
+          description: "When user is missing ANY channels",
+          type: "string",
+          placeholder: "/notJoined"
+        },
+        {
+          name: "debug",
+          title: "Debug mode",
+          type: "checkbox",
+          value: false
+        }
+      ]
     }
-
-    const ch = list[idx].id;
-
-    Api.getChatMember({
-      chat_id: ch,
-      user_id: user.telegramid,
-      on_result: PREFIX + "onOne",
-      on_error: PREFIX + "onErr",
-      bb_options: { token: token, ch: ch }
-    });
-
-  } catch (e) {
-    throw new Error("[SimpleMC] checkNext error: " + (e && e.message));
-  }
-}
-
-function SimpleMC_onOne() {
-  const bb = options.bb_options;
-  if (!bb) return;
-  const token = bb.token;
-  const ch = bb.ch;
-
-  const session = User.getProperty(SESSION_KEY);
-  if (!session || session.token !== token) return;
-
-  const status = options.result?.status || null;
-  const ok = ["member", "administrator", "creator"].includes(status);
-
-  session.results[ch] = { ok: !!ok, status: status, api_error: null, source: "fresh" };
-  session.index = (session.index || 0) + 1;
-  User.setProperty(SESSION_KEY, session, "json");
-
-  Bot.run({ command: PREFIX + "checkNext", options: { token: token }, run_after: STAGGER });
-}
-
-function SimpleMC_onErr() {
-  const bb = options.bb_options;
-  if (!bb) return;
-  const token = bb.token;
-  const ch = bb.ch;
-
-  const session = User.getProperty(SESSION_KEY);
-  if (!session || session.token !== token) return;
-
-  session.results[ch] = { ok: false, status: null, api_error: options || {}, source: "fresh" };
-  session.index = (session.index || 0) + 1;
-  User.setProperty(SESSION_KEY, session, "json");
-
-  Bot.run({ command: PREFIX + "checkNext", options: { token: token }, run_after: STAGGER });
-}
-
-function SimpleMC_finalize() {
-  const session = User.getProperty(SESSION_KEY);
-  if (!session) return;
-
-  const panel = _getPanel();
-  const payload = _buildPayload(session.results, session.channels, session.passed);
-
-  // persist definitive fresh states (skip channels with api_error)
-  const persistent = _getStates();
-  Object.keys(session.results).forEach(chId => {
-    const r = session.results[chId];
-    if (r && !r.api_error) persistent[chId] = !!r.ok;
   });
-  _saveStates(persistent);
 
-  User.setProperty(SESSION_KEY, null);
+  Bot.sendMessage("MyMCL: Admin Panel installed successfully.");
+}
 
-  try {
-    if (payload.all_joined) Bot.run({ command: panel.success, options: payload });
-    else Bot.run({ command: panel.fail, options: payload });
-  } catch (e) {
-    throw new Error("[SimpleMC] finalize run error: " + (e && e.message));
+// -------------------------
+// INTERNAL HELPERS
+// -------------------------
+function getOpts(){
+  return AdminPanel.getPanelValues("MyMCL");
+}
+
+function debug(msg){
+  if(!getOpts().debug){ return }
+  Bot.sendMessage("🔧 MyMCL Debug:\n" + msg);
+}
+
+function parseChats(str){
+  if(!str){ return [] }
+  str = str.split(" ").join("");
+  return str.split(",").filter(c => c !== "");
+}
+
+// -------------------------
+// PUBLIC API
+// -------------------------
+function check(options){
+  let admin = getOpts();
+
+  let chats = options.chats
+      ? parseChats(options.chats)
+      : parseChats(admin.chats);
+
+  if(chats.length === 0){
+    throw new Error("MyMCL: No channels to check. Set them in Admin Panel.");
+  }
+
+  debug("Starting check for: " + JSON.stringify(chats));
+
+  Bot.run({
+    command: PREFIX + "checkAll",
+    options: {
+      chats: chats,
+      index: 0,
+      missing: [],
+      user_id: options.user_id || user.telegramid,
+      success: options.success || admin.onSuccess,
+      fail: options.fail || admin.onFail
+    }
+  });
+}
+
+function isMember(){
+  let missing = getMissing();
+  return missing.length === 0;
+}
+
+function getMissing(){
+  let admin = getOpts();
+  return parseChats(admin.chats).filter(chat => {
+    let prop = User.getProperty(PREFIX + "member_" + chat);
+    return !prop;
+  });
+}
+
+// -------------------------
+// INTERNAL COMMAND HANDLERS
+// -------------------------
+
+// Step through each chat
+function checkAll(){
+  let chats = options.chats;
+  let i = options.index;
+  let missing = options.missing;
+  let user_id = options.user_id;
+
+  // Finished?
+  if(i >= chats.length){
+    Bot.run({
+      command: PREFIX + "finish",
+      options: options
+    });
+    return;
+  }
+
+  let chat_id = chats[i];
+  debug("Checking: " + chat_id);
+
+  Api.getChatMember({
+    chat_id: chat_id,
+    user_id: user_id,
+    on_result: PREFIX + "onChatResult " + chat_id,
+    on_error: PREFIX + "onChatError " + chat_id,
+    bb_options: options
+  });
+}
+
+// Handle success response
+function onChatResult(){
+  let chat_id = params.split(" ")[0];
+  let res = options.result;
+
+  let status = res.status;
+  let joined = ["creator","administrator","member"].includes(status);
+
+  User.setProperty(PREFIX + "member_" + chat_id, joined, "boolean");
+
+  if(!joined){
+    options.bb_options.missing.push(chat_id);
+  }
+
+  // Continue next channel
+  Bot.run({
+    command: PREFIX + "checkAll",
+    options: {
+      chats: options.bb_options.chats,
+      index: options.bb_options.index + 1,
+      missing: options.bb_options.missing,
+      user_id: options.bb_options.user_id,
+      success: options.bb_options.success,
+      fail: options.bb_options.fail
+    }
+  });
+}
+
+// Handle API error
+function onChatError(){
+  let chat_id = params.split(" ")[0];
+  debug("Error checking " + chat_id);
+
+  options.bb_options.missing.push(chat_id);
+
+  // Continue like normal
+  Bot.run({
+    command: PREFIX + "checkAll",
+    options: {
+      chats: options.bb_options.chats,
+      index: options.bb_options.index + 1,
+      missing: options.bb_options.missing,
+      user_id: options.bb_options.user_id,
+      success: options.bb_options.success,
+      fail: options.bb_options.fail
+    }
+  });
+}
+
+// Final result
+function finish(){
+  let missing = options.missing;
+  let success = options.success;
+  let fail = options.fail;
+
+  debug("Finish. Missing: " + JSON.stringify(missing));
+
+  if(missing.length === 0){
+    Bot.run({ command: success, options: { joined: true, missing: [] } });
+  } else {
+    Bot.run({ command: fail, options: { joined: false, missing: missing } });
   }
 }
 
-/* ---------------- publish & handlers ---------------- */
+// -------------------------
+// EXPORT
+// -------------------------
 publish({
-  mcSetup: mcSetup,
-  mcCheck: mcCheck,
-  mcGetChats: mcGetChats,
-  mcGetMissing: mcGetMissing,
-  isMember: isMember
+  setup: setup,
+  check: check,
+  isMember: isMember,
+  getMissing: getMissing
 });
 
-on(PREFIX + "checkNext", SimpleMC_checkNext);
-on(PREFIX + "onOne", SimpleMC_onOne);
-on(PREFIX + "onErr", SimpleMC_onErr);
-on(PREFIX + "finalize", SimpleMC_finalize);
+on(PREFIX + "checkAll", checkAll);
+on(PREFIX + "onChatResult", onChatResult);
+on(PREFIX + "onChatError", onChatError);
+on(PREFIX + "finish", finish);
