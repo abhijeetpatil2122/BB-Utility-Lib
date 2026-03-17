@@ -254,6 +254,30 @@ let COUNTRY = {
     "XK": "Kosovo"
 }
 
+// =============================
+// LANGUAGE → COUNTRY MAP
+// =============================
+let LANG_COUNTRY = {
+  en: "US",
+  hi: "IN",
+  ru: "RU",
+  fr: "FR",
+  de: "DE",
+  es: "ES",
+  it: "IT",
+  pt: "PT",
+  tr: "TR",
+  ja: "JP",
+  ko: "KR",
+  zh: "CN",
+  ar: "SA",
+  uk: "UA",
+  id: "ID",
+  vi: "VN",
+  th: "TH",
+  fa: "IR"
+}
+
 
 // =============================
 // GET COUNTRY NAME
@@ -392,6 +416,32 @@ function format(code){
 
 
 // =============================
+// DETECT COUNTRY FROM USER
+// =============================
+function fromUser(u){
+
+  if(!u) return null
+
+  // direct country_code if available
+  if(u.country_code){
+    return String(u.country_code).toUpperCase()
+  }
+
+  // detect from language
+  if(u.language_code){
+
+    let lang = String(u.language_code).toLowerCase()
+
+    if(LANG_COUNTRY[lang]){
+      return LANG_COUNTRY[lang]
+    }
+
+  }
+
+  return null
+}
+
+// =============================
 // EXPORT LIBRARY
 // =============================
 publish({
@@ -399,5 +449,7 @@ publish({
   getFlag: getFlag,
   getCode: getCode,
   search: search,
-  list: list
+  list: list,
+  format: format,
+  fromUser: fromUser
 })
