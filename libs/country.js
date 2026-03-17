@@ -377,6 +377,19 @@ function list(){
   return arr
 }
 
+// =============================
+// FORMAT COUNTRY
+// =============================
+function format(code){
+
+  if(!code) return ""
+
+  code = String(code).toUpperCase()
+
+  return getFlag(code) + " " + getName(code) + " (" + code + ")"
+
+}
+
 
 // =============================
 // EXPORT LIBRARY
