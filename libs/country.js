@@ -2965,19 +2965,19 @@ function fromUser(u){
 // EXPORT LIBRARY
 // =============================
 publish({
-  getName:getName,
-  getFlag:getFlag,
-  getCode:getCode,
-  search:search,
-  list:list,
-  format:format,
-  getPhone:getPhone,
-  getCurrency:getCurrency,
-  getCapital:getCapital,
-  getContinent:getContinent,
-  getTimezone:getTimezone,
-  info:info,
-  detectByPhone:detectByPhone,
-  random:random,
-  fromUser:fromUser
-})
+  getContinent: getContinent,
+  getCurrency: getCurrency,
+  getTimezone: getTimezone,
+  getCapital: getCapital,
+  detectByPhone: detectByPhone,
+  getPhone: getPhone,
+  getCode: getCode,
+  getFlag: getFlag,
+  getName: getName,
+  random: random,
+  search: search,
+  format: format,
+  fromUser: fromUser,
+  info: info,
+  list: list
+});
