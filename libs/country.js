@@ -258,24 +258,56 @@ let COUNTRY = {
 // LANGUAGE → COUNTRY MAP
 // =============================
 let LANG_COUNTRY = {
+
   en: "US",
-  hi: "IN",
   ru: "RU",
-  fr: "FR",
-  de: "DE",
   es: "ES",
-  it: "IT",
   pt: "PT",
+  de: "DE",
+  fr: "FR",
+  it: "IT",
   tr: "TR",
+  ar: "SA",
+  fa: "IR",
+  id: "ID",
+  hi: "IN",
+  bn: "BD",
+  ur: "PK",
+  pa: "PK",
+  ne: "NP",
+  si: "LK",
+
   ja: "JP",
   ko: "KR",
   zh: "CN",
-  ar: "SA",
-  uk: "UA",
-  id: "ID",
-  vi: "VN",
   th: "TH",
-  fa: "IR"
+  vi: "VN",
+  ms: "MY",
+
+  uk: "UA",
+  uz: "UZ",
+  kk: "KZ",
+  az: "AZ",
+  ka: "GE",
+
+  pl: "PL",
+  nl: "NL",
+  sv: "SE",
+  no: "NO",
+  da: "DK",
+  fi: "FI",
+
+  cs: "CZ",
+  sk: "SK",
+  ro: "RO",
+  bg: "BG",
+  el: "GR",
+
+  he: "IL",
+  km: "KH",
+  lo: "LA",
+  my: "MM"
+
 }
 
 
@@ -386,19 +418,31 @@ function search(text){
 // =============================
 function list(){
 
-  let arr = []
+  let text = "🌍 <b>All Countries</b>\n"
+  text += "From <b>Libs.country</b>\n\n"
 
   for(let code in COUNTRY){
 
-    arr.push({
-      code: code,
-      name: getName(code),
-      flag: getFlag(code)
-    })
+    let flag = getFlag(code)
+    let value = COUNTRY[code]
+
+    let names = Array.isArray(value) ? value : [value]
+
+    let main = names[0]
+    let alt = names.slice(1)
+
+    text += flag + " " + main + " (" + code + ")"
+
+    if(alt.length){
+      text += " — " + alt.join(", ")
+    }
+
+    text += "\n"
 
   }
 
-  return arr
+  return text
+
 }
 
 // =============================
@@ -422,15 +466,15 @@ function fromUser(u){
 
   if(!u) return null
 
-  // direct country_code if available
   if(u.country_code){
     return String(u.country_code).toUpperCase()
   }
 
-  // detect from language
   if(u.language_code){
 
-    let lang = String(u.language_code).toLowerCase()
+    let lang = String(u.language_code)
+      .toLowerCase()
+      .split("-")[0]
 
     if(LANG_COUNTRY[lang]){
       return LANG_COUNTRY[lang]
