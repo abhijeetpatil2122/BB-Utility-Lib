@@ -2596,20 +2596,20 @@ my: "MM"
 // =============================
 // ERROR HELPERS
 // =============================
-function requireParam(name, value){
+function requireParam(func, name, value){
 
   if(value === undefined || value === null || value === ""){
-    throw new Error(LIB_PREFIX + ": Missing required param '" + name + "'")
+    throw new Error(LIB_PREFIX + "." + func + "(): Missing required param '" + name + "'")
   }
 
 }
 
-function requireCountry(code){
+function requireCountry(func, code){
 
   code = normalize(code)
 
   if(!code || !COUNTRIES[code]){
-    throw new Error(LIB_PREFIX + ": Invalid country code '" + code + "'")
+    throw new Error(LIB_PREFIX + "." + func + "(): Invalid country code '" + code + "'")
   }
 
   return code
@@ -2621,7 +2621,7 @@ function requireCountry(code){
 // =============================
 function normalize(code){
 
-  requireParam("code", code)
+  requireParam("normalize", "code", code)
 
   return String(code).toUpperCase()
 
@@ -2633,7 +2633,7 @@ function normalize(code){
 // =============================
 function getName(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getName", code)
 
   return COUNTRIES[code].name
 
@@ -2645,7 +2645,7 @@ function getName(code){
 // =============================
 function getFlag(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getFlag", code)
 
   return String.fromCodePoint(
     127397 + code.charCodeAt(0),
@@ -2660,7 +2660,7 @@ function getFlag(code){
 // =============================
 function getCode(name){
 
-  requireParam("name", name)
+  requireParam("getCode", "name", name)
 
   name = String(name).toLowerCase()
 
@@ -2673,18 +2673,17 @@ function getCode(name){
     }
 
     if(c.alt){
-
       for(let alt of c.alt){
         if(alt.toLowerCase() === name){
           return code
         }
       }
-
     }
 
   }
 
   return null
+
 }
 
 
@@ -2693,7 +2692,7 @@ function getCode(name){
 // =============================
 function search(text){
 
-  requireParam("text", text)
+  requireParam("search", "text", text)
 
   text = String(text).toLowerCase()
 
@@ -2775,7 +2774,7 @@ function list(){
 // =============================
 function format(code){
 
-  code = requireCountry(code)
+  code = requireCountry("format", code)
 
   let c = COUNTRIES[code]
 
@@ -2811,7 +2810,7 @@ function format(code){
 // =============================
 function getPhone(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getPhone", code)
 
   return COUNTRIES[code].phone
 
@@ -2823,7 +2822,7 @@ function getPhone(code){
 // =============================
 function getCurrency(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getCurrency", code)
 
   return COUNTRIES[code].currency
 
@@ -2835,7 +2834,7 @@ function getCurrency(code){
 // =============================
 function getCapital(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getCapital", code)
 
   return COUNTRIES[code].capital
 
@@ -2847,7 +2846,7 @@ function getCapital(code){
 // =============================
 function getContinent(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getContinent", code)
 
   return COUNTRIES[code].continent
 
@@ -2859,7 +2858,7 @@ function getContinent(code){
 // =============================
 function getTimezone(code){
 
-  code = requireCountry(code)
+  code = requireCountry("getTimezone", code)
 
   return COUNTRIES[code].timezone
 
@@ -2871,7 +2870,7 @@ function getTimezone(code){
 // =============================
 function info(code){
 
-  code = requireCountry(code)
+  code = requireCountry("info", code)
 
   let c = COUNTRIES[code]
 
@@ -2891,11 +2890,56 @@ function info(code){
 
 
 // =============================
+// DETECT COUNTRY FROM PHONE
+// =============================
+function detectByPhone(number){
+
+  requireParam("detectByPhone", "number", number)
+
+  number = String(number).replace(/[^0-9+]/g,"")
+
+  for(let code in COUNTRIES){
+
+    let phone = COUNTRIES[code].phone
+    if(!phone) continue
+
+    let clean = phone.replace(/[^0-9+]/g,"")
+
+    if(number.startsWith(clean)){
+      return code
+    }
+
+  }
+
+  return null
+
+}
+
+
+// =============================
+// RANDOM COUNTRY
+// =============================
+function random(){
+
+  let keys = Object.keys(COUNTRIES)
+
+  let code = keys[Math.floor(Math.random()*keys.length)]
+
+  return {
+    code: code,
+    name: COUNTRIES[code].name,
+    flag: getFlag(code)
+  }
+
+}
+
+
+// =============================
 // DETECT COUNTRY FROM USER
 // =============================
 function fromUser(u){
 
-  requireParam("user", u)
+  requireParam("fromUser", "user", u)
 
   if(u.country_code){
     return normalize(u.country_code)
@@ -2934,5 +2978,7 @@ publish({
   getContinent:getContinent,
   getTimezone:getTimezone,
   info:info,
+  detectByPhone:detectByPhone,
+  random:random,
   fromUser:fromUser
 })
