@@ -2622,7 +2622,7 @@ function normalize(code){
 
   requireParam("normalize", "code", code)
 
-  return String(code).toUpperCase()
+  return String(code).trim().toUpperCase()
 
 }
 
@@ -2743,12 +2743,13 @@ function search(text){
 // =============================
 function list(){
 
-  let count = Object.keys(COUNTRIES).length
+  let codes = Object.keys(COUNTRIES).sort()
+  let count = codes.length
 
   let text = "🌍 <b>All Available Countries From Libs.country</b>\n"
   text += "Total: <b>" + count + "</b>\n\n"
 
-  for(let code in COUNTRIES){
+  for(let code of codes){
 
     let c = COUNTRIES[code]
     let alt = c.alt || []
@@ -2901,14 +2902,29 @@ function detectByPhone(phone){
     throw new Error(LIB_PREFIX + ".detectByPhone(): Phone must start with '+'")
   }
 
+  let phones = []
+
   for(let code in COUNTRIES){
 
     let p = COUNTRIES[code].phone
 
-    if(!p) continue
+    if(p){
+      phones.push({
+        code:code,
+        phone:p.replace(/-/g,"")
+      })
+    }
 
-    if(phone.startsWith(p.replace(/-/g,""))){
-      return code
+  }
+
+  phones.sort(function(a,b){
+    return b.phone.length - a.phone.length
+  })
+
+  for(let p of phones){
+
+    if(phone.startsWith(p.phone)){
+      return p.code
     }
 
   }
@@ -3041,19 +3057,19 @@ function fromUser(u){
 publish({
   listByContinent:listByContinent,
   listContinents:listContinents,
-  getContinent: getContinent,
-  getCurrency: getCurrency,
-  getTimezone: getTimezone,
-  getCapital: getCapital,
-  detectByPhone: detectByPhone,
-  getPhone: getPhone,
-  getCode: getCode,
-  getFlag: getFlag,
-  getName: getName,
-  random: random,
-  search: search,
-  format: format,
-  fromUser: fromUser,
-  info: info,
-  list: list
-});
+  getContinent:getContinent,
+  getCurrency:getCurrency,
+  getTimezone:getTimezone,
+  getCapital:getCapital,
+  detectByPhone:detectByPhone,
+  getPhone:getPhone,
+  getCode:getCode,
+  getFlag:getFlag,
+  getName:getName,
+  random:random,
+  search:search,
+  format:format,
+  fromUser:fromUser,
+  info:info,
+  list:list
+})
