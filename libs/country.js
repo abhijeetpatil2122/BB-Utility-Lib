@@ -2889,28 +2889,31 @@ function info(code){
 
 
 // =============================
-// DETECT COUNTRY FROM PHONE
+// DETECT COUNTRY BY PHONE
 // =============================
-function detectByPhone(number){
+function detectByPhone(phone){
 
-  requireParam("detectByPhone", "number", number)
+  requireParam("detectByPhone", "phone", phone)
 
-  number = String(number).replace(/[^0-9+]/g,"")
+  phone = String(phone).replace(/[^0-9+]/g, "")
+
+  if(phone[0] !== "+"){
+    throw new Error(LIB_PREFIX + ".detectByPhone(): Phone must start with '+'")
+  }
 
   for(let code in COUNTRIES){
 
-    let phone = COUNTRIES[code].phone
-    if(!phone) continue
+    let p = COUNTRIES[code].phone
 
-    let clean = phone.replace(/[^0-9+]/g,"")
+    if(!p) continue
 
-    if(number.startsWith(clean)){
+    if(phone.startsWith(p.replace(/-/g,""))){
       return code
     }
 
   }
 
-  return null
+  throw new Error(LIB_PREFIX + ".detectByPhone(): Unknown phone country code")
 
 }
 
