@@ -2916,6 +2916,77 @@ function detectByPhone(number){
 
 
 // =============================
+// LIST ALL CONTINENTS
+// =============================
+function listContinents(){
+
+  let continents = {}
+
+  for(let code in COUNTRIES){
+
+    let c = COUNTRIES[code]
+
+    if(!c.continent) continue
+
+    continents[c.continent] = true
+
+  }
+
+  let list = Object.keys(continents).sort()
+
+  let text = "🌍 <b>Available Continents</b>\n\n"
+
+  for(let c of list){
+    text += "• " + c + "\n"
+  }
+
+  text += "\nTotal: " + list.length
+
+  return text
+
+}
+
+
+// =============================
+// LIST COUNTRIES BY CONTINENT
+// =============================
+function listByContinent(continent){
+
+  requireParam("listByContinent", "continent", continent)
+
+  continent = String(continent).toLowerCase()
+
+  let title = continent.charAt(0).toUpperCase() + continent.slice(1)
+
+  let text = "🌍 <b>Countries in " + title + "</b>\n\n"
+
+  let found = false
+
+  for(let code in COUNTRIES){
+
+    let c = COUNTRIES[code]
+
+    if(!c.continent) continue
+
+    if(c.continent.toLowerCase().includes(continent)){
+
+      text += getFlag(code) + " " + c.name + " (" + code + ")\n"
+      found = true
+
+    }
+
+  }
+
+  if(!found){
+    throw new Error(LIB_PREFIX + ".listByContinent(): No countries found for '" + continent + "'")
+  }
+
+  return text
+
+}
+
+
+// =============================
 // RANDOM COUNTRY
 // =============================
 function random(){
@@ -2965,6 +3036,8 @@ function fromUser(u){
 // EXPORT LIBRARY
 // =============================
 publish({
+  listByContinent:listByContinent,
+  listContinents:listContinents,
   getContinent: getContinent,
   getCurrency: getCurrency,
   getTimezone: getTimezone,
