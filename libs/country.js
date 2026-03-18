@@ -311,6 +311,12 @@ let LANG_COUNTRY = {
 }
 
 
+// Normalisation
+function normalize(code){
+  return String(code).toUpperCase()
+}
+
+
 // =============================
 // GET COUNTRY NAME
 // =============================
