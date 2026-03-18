@@ -1,4 +1,10 @@
 // =============================
+// LIB NAME
+// =============================
+let LIB_PREFIX = "CountryLib"
+
+
+// =============================
 // COUNTRIES DATABASE
 // =============================
 let COUNTRIES = {
@@ -2588,11 +2594,37 @@ my: "MM"
 
 
 // =============================
+// ERROR HELPERS
+// =============================
+function requireParam(name, value){
+
+  if(value === undefined || value === null || value === ""){
+    throw new Error(LIB_PREFIX + ": Missing required param '" + name + "'")
+  }
+
+}
+
+function requireCountry(code){
+
+  code = normalize(code)
+
+  if(!code || !COUNTRIES[code]){
+    throw new Error(LIB_PREFIX + ": Invalid country code '" + code + "'")
+  }
+
+  return code
+}
+
+
+// =============================
 // NORMALIZE CODE
 // =============================
 function normalize(code){
-  if(!code) return null
+
+  requireParam("code", code)
+
   return String(code).toUpperCase()
+
 }
 
 
@@ -2601,13 +2633,10 @@ function normalize(code){
 // =============================
 function getName(code){
 
-  code = normalize(code)
-
-  if(!code || !COUNTRIES[code]){
-    return "Unknown"
-  }
+  code = requireCountry(code)
 
   return COUNTRIES[code].name
+
 }
 
 
@@ -2616,16 +2645,13 @@ function getName(code){
 // =============================
 function getFlag(code){
 
-  code = normalize(code)
-
-  if(!code || code.length !== 2){
-    return ""
-  }
+  code = requireCountry(code)
 
   return String.fromCodePoint(
     127397 + code.charCodeAt(0),
     127397 + code.charCodeAt(1)
   )
+
 }
 
 
@@ -2634,7 +2660,7 @@ function getFlag(code){
 // =============================
 function getCode(name){
 
-  if(!name) return null
+  requireParam("name", name)
 
   name = String(name).toLowerCase()
 
@@ -2667,7 +2693,7 @@ function getCode(name){
 // =============================
 function search(text){
 
-  if(!text) return []
+  requireParam("text", text)
 
   text = String(text).toLowerCase()
 
@@ -2710,6 +2736,7 @@ function search(text){
   }
 
   return results
+
 }
 
 
@@ -2718,13 +2745,14 @@ function search(text){
 // =============================
 function list(){
 
-  let text = "🌍 <b>All Countries</b>\n"
-  text += "From <b>Libs.country</b>\n\n"
+  let count = Object.keys(COUNTRIES).length
+
+  let text = "🌍 <b>All Available Countries From Libs.country</b>\n"
+  text += "Total: <b>" + count + "</b>\n\n"
 
   for(let code in COUNTRIES){
 
     let c = COUNTRIES[code]
-
     let alt = c.alt || []
 
     text += getFlag(code) + " " + c.name + " (" + code + ")"
@@ -2738,6 +2766,7 @@ function list(){
   }
 
   return text
+
 }
 
 
@@ -2746,11 +2775,7 @@ function list(){
 // =============================
 function format(code){
 
-  code = normalize(code)
-
-  if(!code || !COUNTRIES[code]){
-    return ""
-  }
+  code = requireCountry(code)
 
   let c = COUNTRIES[code]
 
@@ -2777,6 +2802,7 @@ function format(code){
   }
 
   return text
+
 }
 
 
@@ -2785,13 +2811,10 @@ function format(code){
 // =============================
 function getPhone(code){
 
-  code = normalize(code)
-
-  if(!code || !COUNTRIES[code]){
-    return null
-  }
+  code = requireCountry(code)
 
   return COUNTRIES[code].phone
+
 }
 
 
@@ -2800,13 +2823,10 @@ function getPhone(code){
 // =============================
 function getCurrency(code){
 
-  code = normalize(code)
-
-  if(!code || !COUNTRIES[code]){
-    return null
-  }
+  code = requireCountry(code)
 
   return COUNTRIES[code].currency
+
 }
 
 
@@ -2815,13 +2835,22 @@ function getCurrency(code){
 // =============================
 function getCapital(code){
 
-  code = normalize(code)
-
-  if(!code || !COUNTRIES[code]){
-    return null
-  }
+  code = requireCountry(code)
 
   return COUNTRIES[code].capital
+
+}
+
+
+// =============================
+// GET CONTINENT
+// =============================
+function getContinent(code){
+
+  code = requireCountry(code)
+
+  return COUNTRIES[code].continent
+
 }
 
 
@@ -2830,13 +2859,34 @@ function getCapital(code){
 // =============================
 function getTimezone(code){
 
-  code = normalize(code)
-
-  if(!code || !COUNTRIES[code]){
-    return null
-  }
+  code = requireCountry(code)
 
   return COUNTRIES[code].timezone
+
+}
+
+
+// =============================
+// GET FULL COUNTRY INFO
+// =============================
+function info(code){
+
+  code = requireCountry(code)
+
+  let c = COUNTRIES[code]
+
+  return {
+    code: code,
+    name: c.name,
+    alt: c.alt,
+    phone: c.phone,
+    currency: c.currency,
+    capital: c.capital,
+    continent: c.continent,
+    timezone: c.timezone,
+    flag: getFlag(code)
+  }
+
 }
 
 
@@ -2845,7 +2895,7 @@ function getTimezone(code){
 // =============================
 function fromUser(u){
 
-  if(!u) return null
+  requireParam("user", u)
 
   if(u.country_code){
     return normalize(u.country_code)
@@ -2864,6 +2914,7 @@ function fromUser(u){
   }
 
   return null
+
 }
 
 
@@ -2880,6 +2931,8 @@ publish({
   getPhone:getPhone,
   getCurrency:getCurrency,
   getCapital:getCapital,
+  getContinent:getContinent,
   getTimezone:getTimezone,
+  info:info,
   fromUser:fromUser
 })
