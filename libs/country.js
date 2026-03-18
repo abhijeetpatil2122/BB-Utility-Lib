@@ -2530,6 +2530,62 @@ XK:{
 
 }
 
+// =============================
+// LANGUAGE → COUNTRY MAP
+// =============================
+let LANG_COUNTRY = {
+
+en: "US",
+ru: "RU",
+es: "ES",
+pt: "PT",
+de: "DE",
+fr: "FR",
+it: "IT",
+tr: "TR",
+ar: "SA",
+fa: "IR",
+id: "ID",
+hi: "IN",
+bn: "BD",
+ur: "PK",
+pa: "PK",
+ne: "NP",
+si: "LK",
+
+ja: "JP",
+ko: "KR",
+zh: "CN",
+th: "TH",
+vi: "VN",
+ms: "MY",
+
+uk: "UA",
+uz: "UZ",
+kk: "KZ",
+az: "AZ",
+ka: "GE",
+
+pl: "PL",
+nl: "NL",
+sv: "SE",
+no: "NO",
+da: "DK",
+fi: "FI",
+
+cs: "CZ",
+sk: "SK",
+ro: "RO",
+bg: "BG",
+el: "GR",
+
+he: "IL",
+km: "KH",
+lo: "LA",
+my: "MM"
+
+}
+
 
 // =============================
 // NORMALIZE CODE
